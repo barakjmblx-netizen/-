@@ -1,492 +1,524 @@
--- Pop It Trading | Mobile Menu v3.0
--- Added: Log Panel with full dump output + copy button
+-- Pop It Trading | Mobile Menu v4.0
+-- Compact: 44px buttons, 260w frame
+-- Remotes wired from actual dump
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RS = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
-local LocalPlayer = Players.LocalPlayer
+local LP = Players.LocalPlayer
 
 pcall(function()
-    game:GetService("CoreGui"):FindFirstChild("MobileAugMenu"):Destroy()
+    game:GetService("CoreGui"):FindFirstChild("PIMMenu"):Destroy()
 end)
 
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MobileAugMenu"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.IgnoreGuiInset = true
-ScreenGui.Parent = game:GetService("CoreGui")
+-- === REMOTE REFS (from dump) ===
+local RE = RS:WaitForChild("RemoteEvents", 5)
+local function re(n) return RE and RE:FindFirstChild(n) end
+local function rf(n) return RE and RE:FindFirstChild(n) end
 
--- === LOG BUFFER ===
-local logLines = {}
-local function logPush(s)
-    table.insert(logLines, s)
+-- === LOG ===
+local logBuf = {}
+local LogText -- forward ref
+
+local function lp(s)
+    table.insert(logBuf, s)
     print(s)
+    if LogText then
+        LogText.Text = table.concat(logBuf, "\n")
+        task.defer(function()
+            local scr = LogText.Parent
+            if scr and scr:IsA("ScrollingFrame") then
+                scr.CanvasPosition = Vector2.new(0, 1e9)
+            end
+        end)
+    end
 end
-local function logClear()
-    logLines = {}
+
+local function lc() logBuf = {} if LogText then LogText.Text = "(empty)" end end
+
+-- === ROOT ===
+local SG = Instance.new("ScreenGui")
+SG.Name = "PIMMenu"
+SG.ResetOnSpawn = false
+SG.IgnoreGuiInset = true
+SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+SG.Parent = game:GetService("CoreGui")
+
+local F = Instance.new("Frame", SG)
+F.Size = UDim2.new(0, 230, 0, 0)
+F.AutomaticSize = Enum.AutomaticSize.Y
+F.Position = UDim2.new(0, 8, 0, 60)
+F.BackgroundColor3 = Color3.fromRGB(12, 12, 20)
+F.BorderSizePixel = 0
+F.ClipsDescendants = true
+Instance.new("UICorner", F).CornerRadius = UDim.new(0, 12)
+local fs = Instance.new("UIStroke", F)
+fs.Color = Color3.fromRGB(70, 50, 140)
+fs.Thickness = 1
+
+-- === DRAG ===
+local drag, ds, dp = false, nil, nil
+F.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch
+    or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        drag = true; ds = i.Position; dp = F.Position
+    end
+end)
+F.InputChanged:Connect(function(i)
+    if drag and (i.UserInputType == Enum.UserInputType.Touch
+    or i.UserInputType == Enum.UserInputType.MouseButton1) then
+        local d = i.Position - ds
+        F.Position = UDim2.new(dp.X.Scale, dp.X.Offset+d.X,
+                               dp.Y.Scale, dp.Y.Offset+d.Y)
+    end
+end)
+F.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.Touch
+    or i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end
+end)
+
+-- === TITLE ===
+local TB = Instance.new("Frame", F)
+TB.Size = UDim2.new(1, 0, 0, 32)
+TB.BackgroundColor3 = Color3.fromRGB(22, 16, 48)
+TB.BorderSizePixel = 0
+Instance.new("UICorner", TB).CornerRadius = UDim.new(0, 12)
+
+local TL = Instance.new("TextLabel", TB)
+TL.Size = UDim2.new(1, -38, 1, 0)
+TL.Position = UDim2.new(0, 10, 0, 0)
+TL.BackgroundTransparency = 1
+TL.TextColor3 = Color3.fromRGB(190, 160, 255)
+TL.Text = "⚡ Pop It"
+TL.Font = Enum.Font.GothamBold
+TL.TextSize = 13
+TL.TextXAlignment = Enum.TextXAlignment.Left
+
+local XB = Instance.new("TextButton", TB)
+XB.Size = UDim2.new(0, 26, 0, 26)
+XB.Position = UDim2.new(1, -30, 0, 3)
+XB.BackgroundColor3 = Color3.fromRGB(160, 36, 54)
+XB.Text = "✕"
+XB.TextColor3 = Color3.new(1,1,1)
+XB.Font = Enum.Font.GothamBold
+XB.TextSize = 11
+Instance.new("UICorner", XB).CornerRadius = UDim.new(0, 6)
+XB.MouseButton1Up:Connect(function() SG:Destroy() end)
+
+-- === STATUS ===
+local ST = Instance.new("TextLabel", F)
+ST.Size = UDim2.new(1, -12, 0, 20)
+ST.Position = UDim2.new(0, 6, 0, 34)
+ST.BackgroundTransparency = 1
+ST.TextColor3 = Color3.fromRGB(90, 210, 120)
+ST.Font = Enum.Font.Gotham
+ST.TextSize = 11
+ST.TextXAlignment = Enum.TextXAlignment.Left
+ST.Text = "● Ready"
+
+local function ss(msg, col)
+    ST.Text = "● "..msg
+    ST.TextColor3 = col or Color3.fromRGB(90,210,120)
 end
-local function logGet()
-    return table.concat(logLines, "\n")
-end
 
--- === MAIN FRAME ===
-local Frame = Instance.new("Frame")
-Frame.Size = UDim2.new(0, 290, 0, 420)
-Frame.Position = UDim2.new(0.5, -145, 0.5, -210)
-Frame.BackgroundColor3 = Color3.fromRGB(14, 14, 22)
-Frame.BorderSizePixel = 0
-Frame.ClipsDescendants = true
-Frame.Parent = ScreenGui
-Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 16)
-local stroke = Instance.new("UIStroke", Frame)
-stroke.Color = Color3.fromRGB(80, 60, 160)
-stroke.Thickness = 1.5
+-- === BUTTON LIST ===
+local BL = Instance.new("Frame", F)
+BL.Size = UDim2.new(1, 0, 0, 0)
+BL.AutomaticSize = Enum.AutomaticSize.Y
+BL.Position = UDim2.new(0, 0, 0, 56)
+BL.BackgroundTransparency = 1
 
--- === LOG PANEL (overlay, hidden by default) ===
-local LogPanel = Instance.new("Frame")
-LogPanel.Size = UDim2.new(1, 0, 1, 0)
-LogPanel.Position = UDim2.new(1, 0, 0, 0) -- off-screen right
-LogPanel.BackgroundColor3 = Color3.fromRGB(10, 10, 18)
-LogPanel.BorderSizePixel = 0
-LogPanel.ZIndex = 10
-LogPanel.ClipsDescendants = true
-LogPanel.Parent = Frame
-Instance.new("UICorner", LogPanel).CornerRadius = UDim.new(0, 16)
+local BLL = Instance.new("UIListLayout", BL)
+BLL.Padding = UDim.new(0, 4)
+BLL.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
--- Log title bar
-local LogBar = Instance.new("Frame")
-LogBar.Size = UDim2.new(1, 0, 0, 48)
-LogBar.BackgroundColor3 = Color3.fromRGB(20, 14, 44)
-LogBar.BorderSizePixel = 0
-LogBar.ZIndex = 11
-LogBar.Parent = LogPanel
-Instance.new("UICorner", LogBar).CornerRadius = UDim.new(0, 16)
+local BLP = Instance.new("UIPadding", BL)
+BLP.PaddingLeft = UDim.new(0, 6)
+BLP.PaddingRight = UDim.new(0, 6)
+BLP.PaddingBottom = UDim.new(0, 8)
 
-local LogTitle = Instance.new("TextLabel", LogBar)
-LogTitle.Size = UDim2.new(1, -60, 1, 0)
-LogTitle.Position = UDim2.new(0, 14, 0, 0)
-LogTitle.BackgroundTransparency = 1
-LogTitle.TextColor3 = Color3.fromRGB(180, 140, 255)
-LogTitle.Text = "📋 Log"
-LogTitle.Font = Enum.Font.GothamBold
-LogTitle.TextSize = 15
-LogTitle.TextXAlignment = Enum.TextXAlignment.Left
-LogTitle.ZIndex = 12
+-- LOG PANEL (child of F, slides over)
+local LP_Frame = Instance.new("Frame", F)
+LP_Frame.Size = UDim2.new(1, 0, 0, 320)
+LP_Frame.Position = UDim2.new(1, 0, 0, 0)
+LP_Frame.BackgroundColor3 = Color3.fromRGB(8, 8, 16)
+LP_Frame.BorderSizePixel = 0
+LP_Frame.ZIndex = 20
+LP_Frame.ClipsDescendants = true
+LP_Frame.Visible = false
+Instance.new("UICorner", LP_Frame).CornerRadius = UDim.new(0, 12)
 
-local BackBtn = Instance.new("TextButton", LogBar)
-BackBtn.Size = UDim2.new(0, 36, 0, 36)
-BackBtn.Position = UDim2.new(1, -42, 0, 6)
-BackBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 80)
-BackBtn.Text = "←"
-BackBtn.TextColor3 = Color3.new(1,1,1)
-BackBtn.Font = Enum.Font.GothamBold
-BackBtn.TextSize = 16
-BackBtn.ZIndex = 12
-Instance.new("UICorner", BackBtn).CornerRadius = UDim.new(0, 8)
+local LPBar = Instance.new("Frame", LP_Frame)
+LPBar.Size = UDim2.new(1, 0, 0, 30)
+LPBar.BackgroundColor3 = Color3.fromRGB(18, 12, 40)
+LPBar.BorderSizePixel = 0
+LPBar.ZIndex = 21
+Instance.new("UICorner", LPBar).CornerRadius = UDim.new(0, 12)
 
--- Log scroll area
-local LogScroll = Instance.new("ScrollingFrame", LogPanel)
-LogScroll.Size = UDim2.new(1, -12, 1, -108)
-LogScroll.Position = UDim2.new(0, 6, 0, 52)
-LogScroll.BackgroundColor3 = Color3.fromRGB(8, 8, 14)
-LogScroll.BorderSizePixel = 0
-LogScroll.ScrollBarThickness = 3
-LogScroll.ScrollBarImageColor3 = Color3.fromRGB(80, 60, 160)
-LogScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-LogScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-LogScroll.ZIndex = 11
-Instance.new("UICorner", LogScroll).CornerRadius = UDim.new(0, 8)
+local LPTitle = Instance.new("TextLabel", LPBar)
+LPTitle.Size = UDim2.new(1, -36, 1, 0)
+LPTitle.Position = UDim2.new(0, 10, 0, 0)
+LPTitle.BackgroundTransparency = 1
+LPTitle.TextColor3 = Color3.fromRGB(170, 130, 255)
+LPTitle.Text = "📋 Log"
+LPTitle.Font = Enum.Font.GothamBold
+LPTitle.TextSize = 12
+LPTitle.TextXAlignment = Enum.TextXAlignment.Left
+LPTitle.ZIndex = 22
 
-local LogPad = Instance.new("UIPadding", LogScroll)
-LogPad.PaddingTop = UDim.new(0, 6)
-LogPad.PaddingLeft = UDim.new(0, 8)
-LogPad.PaddingRight = UDim.new(0, 8)
-LogPad.PaddingBottom = UDim.new(0, 6)
+local BackB = Instance.new("TextButton", LPBar)
+BackB.Size = UDim2.new(0, 26, 0, 24)
+BackB.Position = UDim2.new(1, -30, 0, 3)
+BackB.BackgroundColor3 = Color3.fromRGB(44, 44, 72)
+BackB.Text = "←"
+BackB.TextColor3 = Color3.new(1,1,1)
+BackB.Font = Enum.Font.GothamBold
+BackB.TextSize = 12
+BackB.ZIndex = 22
+Instance.new("UICorner", BackB).CornerRadius = UDim.new(0, 6)
 
-local LogText = Instance.new("TextLabel", LogScroll)
+local LogScr = Instance.new("ScrollingFrame", LP_Frame)
+LogScr.Size = UDim2.new(1, -8, 1, -72)
+LogScr.Position = UDim2.new(0, 4, 0, 33)
+LogScr.BackgroundColor3 = Color3.fromRGB(6, 6, 12)
+LogScr.BorderSizePixel = 0
+LogScr.ScrollBarThickness = 2
+LogScr.ScrollBarImageColor3 = Color3.fromRGB(70, 50, 140)
+LogScr.CanvasSize = UDim2.new(0, 0, 0, 0)
+LogScr.AutomaticCanvasSize = Enum.AutomaticSize.Y
+LogScr.ZIndex = 21
+Instance.new("UICorner", LogScr).CornerRadius = UDim.new(0, 6)
+
+local LPad = Instance.new("UIPadding", LogScr)
+LPad.PaddingAll = UDim.new(0, 5)
+
+LogText = Instance.new("TextLabel", LogScr)
 LogText.Size = UDim2.new(1, 0, 0, 0)
 LogText.AutomaticSize = Enum.AutomaticSize.Y
 LogText.BackgroundTransparency = 1
-LogText.TextColor3 = Color3.fromRGB(160, 220, 160)
+LogText.TextColor3 = Color3.fromRGB(140, 210, 140)
 LogText.Font = Enum.Font.Code
-LogText.TextSize = 11
+LogText.TextSize = 10
 LogText.TextXAlignment = Enum.TextXAlignment.Left
 LogText.TextYAlignment = Enum.TextYAlignment.Top
 LogText.TextWrapped = true
-LogText.RichText = false
-LogText.Text = "(empty — run a dump first)"
-LogText.ZIndex = 12
+LogText.Text = "(empty)"
+LogText.ZIndex = 22
 
--- Copy button (bottom of log panel)
-local CopyBtn = Instance.new("TextButton", LogPanel)
-CopyBtn.Size = UDim2.new(1, -24, 0, 44)
-CopyBtn.Position = UDim2.new(0, 12, 1, -56)
-CopyBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 80)
-CopyBtn.Text = "📋  Copy to Clipboard"
-CopyBtn.TextColor3 = Color3.new(1,1,1)
-CopyBtn.Font = Enum.Font.GothamBold
-CopyBtn.TextSize = 13
-CopyBtn.ZIndex = 12
-Instance.new("UICorner", CopyBtn).CornerRadius = UDim.new(0, 12)
+local CopyB = Instance.new("TextButton", LP_Frame)
+CopyB.Size = UDim2.new(1, -12, 0, 30)
+CopyB.Position = UDim2.new(0, 6, 1, -36)
+CopyB.BackgroundColor3 = Color3.fromRGB(36, 100, 60)
+CopyB.Text = "📋 Copy"
+CopyB.TextColor3 = Color3.new(1,1,1)
+CopyB.Font = Enum.Font.GothamBold
+CopyB.TextSize = 12
+CopyB.ZIndex = 22
+Instance.new("UICorner", CopyB).CornerRadius = UDim.new(0, 8)
 
-CopyBtn.MouseButton1Up:Connect(function()
-    local content = logGet()
-    if content == "" then
-        CopyBtn.Text = "⚠ Log is empty"
-    elseif setclipboard then
-        setclipboard(content)
-        CopyBtn.Text = "✓ Copied!"
-    else
-        CopyBtn.Text = "⚠ No clipboard API"
-    end
-    task.delay(1.8, function()
-        CopyBtn.Text = "📋  Copy to Clipboard"
-    end)
+CopyB.MouseButton1Up:Connect(function()
+    local s = table.concat(logBuf, "\n")
+    if s == "" then CopyB.Text = "⚠ Empty"
+    elseif setclipboard then setclipboard(s); CopyB.Text = "✓ Copied"
+    else CopyB.Text = "⚠ No API" end
+    task.delay(1.6, function() CopyB.Text = "📋 Copy" end)
 end)
 
--- Slide animation
-local logOpen = false
 local function openLog()
-    logOpen = true
-    TweenService:Create(LogPanel, TweenInfo.new(0.22, Enum.EasingStyle.Quart), {
-        Position = UDim2.new(0, 0, 0, 0)
-    }):Play()
+    LP_Frame.Visible = true
+    LP_Frame.Position = UDim2.new(0, 0, 0, 0)
 end
-local function closeLog()
-    logOpen = false
-    TweenService:Create(LogPanel, TweenInfo.new(0.18, Enum.EasingStyle.Quart), {
-        Position = UDim2.new(1, 0, 0, 0)
-    }):Play()
-end
-BackBtn.MouseButton1Up:Connect(closeLog)
-
-local function updateLogDisplay()
-    local content = logGet()
-    LogText.Text = content ~= "" and content or "(empty)"
-    -- Scroll to bottom
-    task.defer(function()
-        LogScroll.CanvasPosition = Vector2.new(0, math.huge)
-    end)
-end
-
--- === DRAG (title bar) ===
-local dragging, dragStart, startPos = false, nil, nil
-
-local TitleBar = Instance.new("Frame", Frame)
-TitleBar.Size = UDim2.new(1, 0, 0, 48)
-TitleBar.BackgroundColor3 = Color3.fromRGB(28, 20, 55)
-TitleBar.BorderSizePixel = 0
-Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 16)
-
-local TitleLabel = Instance.new("TextLabel", TitleBar)
-TitleLabel.Size = UDim2.new(1, -50, 1, 0)
-TitleLabel.Position = UDim2.new(0, 14, 0, 0)
-TitleLabel.BackgroundTransparency = 1
-TitleLabel.TextColor3 = Color3.fromRGB(200, 170, 255)
-TitleLabel.Text = "⚡ Pop It Menu"
-TitleLabel.Font = Enum.Font.GothamBold
-TitleLabel.TextSize = 16
-TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-local CloseBtn = Instance.new("TextButton", TitleBar)
-CloseBtn.Size = UDim2.new(0, 36, 0, 36)
-CloseBtn.Position = UDim2.new(1, -42, 0, 6)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 60)
-CloseBtn.Text = "✕"
-CloseBtn.TextColor3 = Color3.new(1,1,1)
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 14
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 8)
-CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
-
-TitleBar.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.Touch
-    or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true; dragStart = i.Position; startPos = Frame.Position
-    end
+BackB.MouseButton1Up:Connect(function()
+    LP_Frame.Visible = false
 end)
-TitleBar.InputChanged:Connect(function(i)
-    if dragging and (i.UserInputType == Enum.UserInputType.Touch
-    or i.UserInputType == Enum.UserInputType.MouseButton1) then
-        local d = i.Position - dragStart
-        Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
-                                   startPos.Y.Scale, startPos.Y.Offset + d.Y)
-    end
-end)
-TitleBar.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.Touch
-    or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = false
-    end
-end)
-
--- === STATUS ===
-local Status = Instance.new("TextLabel", Frame)
-Status.Size = UDim2.new(1, -20, 0, 26)
-Status.Position = UDim2.new(0, 10, 0, 52)
-Status.BackgroundTransparency = 1
-Status.TextColor3 = Color3.fromRGB(100, 220, 140)
-Status.Font = Enum.Font.Gotham
-Status.TextSize = 12
-Status.TextXAlignment = Enum.TextXAlignment.Left
-Status.Text = "● Ready"
-
-local function setStatus(msg, color)
-    Status.Text = "● " .. msg
-    Status.TextColor3 = color or Color3.fromRGB(100, 220, 140)
-end
-
--- === SCROLL CONTAINER ===
-local Scroll = Instance.new("ScrollingFrame", Frame)
-Scroll.Size = UDim2.new(1, 0, 1, -84)
-Scroll.Position = UDim2.new(0, 0, 0, 82)
-Scroll.BackgroundTransparency = 1
-Scroll.BorderSizePixel = 0
-Scroll.ScrollBarThickness = 3
-Scroll.ScrollBarImageColor3 = Color3.fromRGB(80, 60, 160)
-Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-
-local Layout = Instance.new("UIListLayout", Scroll)
-Layout.Padding = UDim.new(0, 8)
-Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-
-local Pad = Instance.new("UIPadding", Scroll)
-Pad.PaddingTop = UDim.new(0, 6)
-Pad.PaddingLeft = UDim.new(0, 10)
-Pad.PaddingRight = UDim.new(0, 10)
-Pad.PaddingBottom = UDim.new(0, 10)
 
 -- === BUTTON FACTORY ===
-local function MakeButton(icon, label, desc, color, callback)
-    local btn = Instance.new("TextButton", Scroll)
-    btn.Size = UDim2.new(1, 0, 0, 64)
-    btn.BackgroundColor3 = color
-    btn.BorderSizePixel = 0
-    btn.Text = ""
-    btn.AutoButtonColor = false
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 12)
+local function btn(icon, label, col, cb)
+    local b = Instance.new("TextButton", BL)
+    b.Size = UDim2.new(1, 0, 0, 38)
+    b.BackgroundColor3 = col
+    b.BorderSizePixel = 0
+    b.Text = ""
+    b.AutoButtonColor = false
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
 
-    local iL = Instance.new("TextLabel", btn)
-    iL.Size = UDim2.new(0, 48, 1, 0)
-    iL.Position = UDim2.new(0, 8, 0, 0)
-    iL.BackgroundTransparency = 1
-    iL.TextColor3 = Color3.new(1,1,1)
-    iL.Text = icon
-    iL.Font = Enum.Font.GothamBold
-    iL.TextSize = 26
+    local il = Instance.new("TextLabel", b)
+    il.Size = UDim2.new(0, 34, 1, 0)
+    il.BackgroundTransparency = 1
+    il.TextColor3 = Color3.new(1,1,1)
+    il.Text = icon
+    il.Font = Enum.Font.GothamBold
+    il.TextSize = 16
 
-    local tL = Instance.new("TextLabel", btn)
-    tL.Size = UDim2.new(1, -64, 0, 28)
-    tL.Position = UDim2.new(0, 58, 0, 8)
-    tL.BackgroundTransparency = 1
-    tL.TextColor3 = Color3.new(1,1,1)
-    tL.Text = label
-    tL.Font = Enum.Font.GothamBold
-    tL.TextSize = 14
-    tL.TextXAlignment = Enum.TextXAlignment.Left
+    local tl = Instance.new("TextLabel", b)
+    tl.Size = UDim2.new(1, -38, 1, 0)
+    tl.Position = UDim2.new(0, 36, 0, 0)
+    tl.BackgroundTransparency = 1
+    tl.TextColor3 = Color3.new(1,1,1)
+    tl.Text = label
+    tl.Font = Enum.Font.GothamSemibold
+    tl.TextSize = 12
+    tl.TextXAlignment = Enum.TextXAlignment.Left
 
-    local dL = Instance.new("TextLabel", btn)
-    dL.Size = UDim2.new(1, -64, 0, 20)
-    dL.Position = UDim2.new(0, 58, 0, 34)
-    dL.BackgroundTransparency = 1
-    dL.TextColor3 = Color3.fromRGB(200,200,200)
-    dL.Text = desc
-    dL.Font = Enum.Font.Gotham
-    dL.TextSize = 11
-    dL.TextXAlignment = Enum.TextXAlignment.Left
-
-    local baseColor = color
-    btn.MouseButton1Down:Connect(function()
-        TweenService:Create(btn, TweenInfo.new(0.07), {
+    b.MouseButton1Down:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.06), {
             BackgroundColor3 = Color3.fromRGB(
-                math.clamp(baseColor.R*255+35,0,255)/255,
-                math.clamp(baseColor.G*255+35,0,255)/255,
-                math.clamp(baseColor.B*255+35,0,255)/255
-            )
+                math.min(col.R*255+40,255)/255,
+                math.min(col.G*255+40,255)/255,
+                math.min(col.B*255+40,255)/255)
         }):Play()
     end)
-    btn.MouseButton1Up:Connect(function()
-        TweenService:Create(btn, TweenInfo.new(0.1), {BackgroundColor3 = baseColor}):Play()
-        callback()
+    b.MouseButton1Up:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.1), {BackgroundColor3=col}):Play()
+        cb()
     end)
-    return btn
+    return b
 end
 
--- === CORE FUNCTIONS ===
-local function injectMoney()
-    setStatus("Injecting...", Color3.fromRGB(255,200,60))
-    logPush("\n[MONEY INJECT] " .. os.date and os.date() or "")
-    local ok, err = pcall(function()
-        local root = ReplicatedStorage:FindFirstChild("Remotes")
-            or ReplicatedStorage:FindFirstChild("Events")
-            or ReplicatedStorage
-        for _, obj in ipairs(root:GetDescendants()) do
-            if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                local n = obj.Name:lower()
-                if n:find("cash") or n:find("money") or n:find("coin")
-                or n:find("currency") or n:find("earn") or n:find("reward") then
-                    logPush("  FIRE -> " .. obj:GetFullName())
-                    pcall(function()
-                        if obj:IsA("RemoteEvent") then obj:FireServer(999999)
-                        else obj:InvokeServer(999999) end
-                    end)
-                end
+-- === ACTIONS (real remotes from dump) ===
+
+local function doMoney()
+    ss("Injecting...", Color3.fromRGB(255,200,50))
+    lp("\n[MONEY INJECT]")
+    pcall(function()
+        -- Direct cash remotes from dump
+        local targets = {"BuyCash","BuyCash500","BuyCash1000","BuyCash10000"}
+        for _, name in ipairs(targets) do
+            local r = re(name)
+            if r then
+                lp("  FireServer -> "..name)
+                pcall(function() r:FireServer() end)
             end
         end
-        local s = LocalPlayer:FindFirstChild("leaderstats")
+        -- GetItem — general item grant surface
+        local gi = re("GetItem")
+        if gi then
+            lp("  FireServer -> GetItem")
+            pcall(function() gi:FireServer() end)
+        end
+        -- Leaderstats direct write
+        local s = LP:FindFirstChild("leaderstats")
         if s then
             for _, v in ipairs(s:GetChildren()) do
                 pcall(function()
-                    logPush("  WRITE leaderstats." .. v.Name .. " += 999999")
+                    lp("  Write leaderstats."..v.Name.." += 999999")
                     v.Value = v.Value + 999999
                 end)
             end
         end
     end)
-    logPush(ok and "  [OK]" or "  [ERR] "..tostring(err))
-    setStatus(ok and "Money injected" or "Error: "..tostring(err),
-              ok and Color3.fromRGB(100,220,140) or Color3.fromRGB(255,80,80))
-    updateLogDisplay()
+    lp("  [done]")
+    ss("Money done", Color3.fromRGB(90,210,120))
 end
 
-local function dupeItems()
-    setStatus("Duping...", Color3.fromRGB(255,200,60))
-    logPush("\n[DUPE PASS]")
-    local ok, err = pcall(function()
-        local root = ReplicatedStorage:FindFirstChild("Remotes")
-            or ReplicatedStorage:FindFirstChild("Events")
-            or ReplicatedStorage
-        for _, obj in ipairs(root:GetDescendants()) do
-            if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                local n = obj.Name:lower()
-                if n:find("trade") or n:find("give") or n:find("item")
-                or n:find("equip") or n:find("dupe") or n:find("transfer") then
-                    logPush("  FIRE -> " .. obj:GetFullName())
-                    pcall(function()
-                        if obj:IsA("RemoteEvent") then
-                            obj:FireServer(LocalPlayer, LocalPlayer.UserId, 999)
-                        else obj:InvokeServer(LocalPlayer, LocalPlayer.UserId, 999) end
-                    end)
-                end
-            end
-        end
-        local bp = LocalPlayer:FindFirstChild("Backpack")
+local function doDupe()
+    ss("Duping...", Color3.fromRGB(255,200,50))
+    lp("\n[DUPE]")
+    pcall(function()
+        -- ReDrop — re-grant last dropped item
+        local rd = re("ReDrop")
+        if rd then lp("  FireServer -> ReDrop"); pcall(function() rd:FireServer() end) end
+        -- OpenSpawnerReward
+        local osr = re("OpenSpawnerReward")
+        if osr then lp("  FireServer -> OpenSpawnerReward"); pcall(function() osr:FireServer() end) end
+        -- ClaimPrize (RemoteFunction)
+        local cp = rf("ClaimPrize")
+        if cp then lp("  Invoke -> ClaimPrize"); pcall(function() cp:InvokeServer() end) end
+        -- FruitClaim
+        local fc = rf("FruitClaim")
+        if fc then lp("  Invoke -> FruitClaim"); pcall(function() fc:InvokeServer() end) end
+        -- Backpack clone
+        local bp = LP:FindFirstChild("Backpack")
         if bp then
             for _, tool in ipairs(bp:GetChildren()) do
-                logPush("  CLONE -> " .. tool.Name)
-                pcall(function() tool:Clone().Parent = bp end)
+                pcall(function()
+                    lp("  Clone -> "..tool.Name)
+                    tool:Clone().Parent = bp
+                end)
             end
         end
     end)
-    logPush(ok and "  [OK]" or "  [ERR] "..tostring(err))
-    setStatus(ok and "Dupe pass complete" or "Error: "..tostring(err),
-              ok and Color3.fromRGB(100,220,140) or Color3.fromRGB(255,80,80))
-    updateLogDisplay()
+    lp("  [done]")
+    ss("Dupe done", Color3.fromRGB(90,210,120))
 end
 
-local function dumpInventory()
-    setStatus("Dumping inventory...", Color3.fromRGB(255,200,60))
-    logPush("\n[INVENTORY DUMP]")
-    local ok, err = pcall(function()
-        local s = LocalPlayer:FindFirstChild("leaderstats")
-        if s then
-            logPush("  [Leaderstats]")
-            for _, v in ipairs(s:GetChildren()) do
-                logPush("    " .. v.Name .. ": " .. tostring(v.Value))
+local function doSpin()
+    ss("Spinning wheel...", Color3.fromRGB(255,200,50))
+    lp("\n[SPIN WHEEL]")
+    pcall(function()
+        -- RequireWheelItemData first, then SpinWheel
+        local rwd = rf("RequireWheelItemData")
+        if rwd then
+            lp("  Invoke -> RequireWheelItemData")
+            pcall(function()
+                local data = rwd:InvokeServer()
+                lp("  WheelData: "..tostring(data))
+            end)
+        end
+        local sw = rf("SpinWheel")
+        if sw then
+            lp("  Invoke -> SpinWheel")
+            pcall(function()
+                local result = sw:InvokeServer()
+                lp("  Result: "..tostring(result))
+            end)
+        end
+    end)
+    lp("  [done]")
+    ss("Spin done", Color3.fromRGB(90,210,120))
+    openLog()
+end
+
+local function doCalendar()
+    ss("Claiming calendar...", Color3.fromRGB(255,200,50))
+    lp("\n[CALENDAR CLAIM]")
+    pcall(function()
+        local gc = rf("GetCalendarItems")
+        if gc then
+            lp("  Invoke -> GetCalendarItems")
+            pcall(function()
+                local items = gc:InvokeServer()
+                lp("  Items: "..tostring(items))
+            end)
+        end
+        -- Claim each day 1-31
+        local cd = rf("ClaimCalendarDay")
+        if cd then
+            for day = 1, 31 do
+                pcall(function()
+                    local r = cd:InvokeServer(day)
+                    if r then lp("  Day "..day.." -> "..tostring(r)) end
+                end)
             end
         end
-        local bp = LocalPlayer:FindFirstChild("Backpack")
-        if bp then
-            logPush("  [Backpack]")
-            for _, i in ipairs(bp:GetChildren()) do
-                logPush("    " .. i.Name .. " [" .. i.ClassName .. "]")
+    end)
+    lp("  [done]")
+    ss("Calendar done", Color3.fromRGB(90,210,120))
+    openLog()
+end
+
+local function doGroupReward()
+    ss("Claiming group reward...", Color3.fromRGB(255,200,50))
+    lp("\n[GROUP REWARD]")
+    pcall(function()
+        local rg = re("RequestGroupReward")
+        if rg then
+            lp("  FireServer -> RequestGroupReward")
+            pcall(function() rg:FireServer() end)
+        end
+        local cg = re("ClaimGroupReward")
+        if cg then
+            lp("  FireServer -> ClaimGroupReward")
+            pcall(function() cg:FireServer() end)
+        end
+        local cu = rf("CheckGroupUniqueReward")
+        if cu then
+            lp("  Invoke -> CheckGroupUniqueReward")
+            pcall(function()
+                local r = cu:InvokeServer()
+                lp("  Result: "..tostring(r))
+            end)
+        end
+    end)
+    lp("  [done]")
+    ss("Group reward done", Color3.fromRGB(90,210,120))
+end
+
+local function doCode()
+    ss("Requesting code...", Color3.fromRGB(255,200,50))
+    lp("\n[CODE REDEEM]")
+    -- Common codes seen in Pop It Trading
+    local codes = {"FREECASH","FREE","COINS","REWARD","UPDATE","SECRET","HOLIDAY"}
+    pcall(function()
+        local rc = re("RequestCode")
+        if rc then
+            for _, code in ipairs(codes) do
+                pcall(function()
+                    lp("  FireServer -> RequestCode("..code..")")
+                    rc:FireServer(code)
+                    task.wait(0.3)
+                end)
             end
         end
-        local char = LocalPlayer.Character
-        if char then
-            logPush("  [Equipped]")
-            for _, obj in ipairs(char:GetChildren()) do
-                if obj:IsA("Tool") then
-                    logPush("    " .. obj.Name)
+    end)
+    lp("  [done]")
+    ss("Codes fired", Color3.fromRGB(90,210,120))
+end
+
+local function doFullDump()
+    ss("Full dump...", Color3.fromRGB(255,200,50))
+    lc()
+    lp("=== FULL DUMP ===")
+
+    local services = {
+        {"ReplicatedStorage", RS},
+        {"Workspace", game:GetService("Workspace")},
+        {"StarterGui", game:GetService("StarterGui")},
+        {"StarterPack", game:GetService("StarterPack")},
+        {"Players.LocalPlayer", LP},
+    }
+
+    for _, pair in ipairs(services) do
+        local name, svc = pair[1], pair[2]
+        lp("\n-- "..name)
+        pcall(function()
+            for _, obj in ipairs(svc:GetDescendants()) do
+                local t = obj.ClassName
+                if t=="RemoteEvent" or t=="RemoteFunction"
+                or t=="BindableEvent" or t=="BindableFunction"
+                or t=="ModuleScript" then
+                    lp("  ["..t.."] "..obj:GetFullName())
+                end
+            end
+        end)
+    end
+
+    -- Values
+    lp("\n-- VALUES")
+    pcall(function()
+        for _, obj in ipairs(RS:GetDescendants()) do
+            local t = obj.ClassName
+            if t=="StringValue" or t=="NumberValue" or t=="IntValue"
+            or t=="BoolValue" or t=="Color3Value" or t=="Vector3Value" then
+                lp("  ["..t.."] "..obj.Name.." = "..tostring(obj.Value))
+            end
+        end
+    end)
+
+    -- Player children (all, deep)
+    lp("\n-- PLAYER INSTANCES")
+    pcall(function()
+        for _, obj in ipairs(LP:GetDescendants()) do
+            local val = ""
+            pcall(function() val = " = "..tostring(obj.Value) end)
+            lp("  ["..obj.ClassName.."] "..obj:GetFullName()..val)
+        end
+    end)
+
+    -- PlayerGui scripts
+    lp("\n-- PLAYER GUI SCRIPTS")
+    pcall(function()
+        local pg = LP:FindFirstChild("PlayerGui")
+        if pg then
+            for _, obj in ipairs(pg:GetDescendants()) do
+                if obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
+                    lp("  ["..obj.ClassName.."] "..obj:GetFullName())
                 end
             end
         end
     end)
-    logPush(ok and "  [OK]" or "  [ERR] "..tostring(err))
-    setStatus(ok and "Inventory dumped" or "Error: "..tostring(err),
-              ok and Color3.fromRGB(100,220,140) or Color3.fromRGB(255,80,80))
-    updateLogDisplay()
-end
 
-local function fullDump()
-    setStatus("Full dump running...", Color3.fromRGB(255,200,60))
-    logClear()
-    logPush("=== FULL GAME DUMP ===")
-
-    local function sweep(root, name)
-        logPush("\n-- " .. name)
-        local found = 0
-        for _, obj in ipairs(root:GetDescendants()) do
-            local t = obj.ClassName
-            if t=="RemoteEvent" or t=="RemoteFunction"
-            or t=="BindableEvent" or t=="BindableFunction"
-            or t=="ModuleScript" then
-                logPush(string.format("  [%-18s] %s", t, obj:GetFullName()))
-                found = found + 1
-            end
-        end
-        if found == 0 then logPush("  (none)") end
-    end
-
-    pcall(function() sweep(ReplicatedStorage, "ReplicatedStorage") end)
-    pcall(function() sweep(game:GetService("Workspace"), "Workspace") end)
-    pcall(function() sweep(game:GetService("StarterGui"), "StarterGui") end)
-    pcall(function() sweep(game:GetService("StarterPack"), "StarterPack") end)
-    pcall(function() sweep(LocalPlayer, "LocalPlayer") end)
-
-    -- Values
-    logPush("\n-- CONFIG VALUES (ReplicatedStorage)")
-    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-        local t = obj.ClassName
-        if t=="StringValue" or t=="NumberValue" or t=="IntValue"
-        or t=="BoolValue" or t=="Color3Value" or t=="Vector3Value" then
-            logPush(string.format("  [%-12s] %-35s = %s", t, obj.Name, tostring(obj.Value)))
-        end
-    end
-
-    -- Player data
-    logPush("\n-- PLAYER DATA")
-    for _, obj in ipairs(LocalPlayer:GetChildren()) do
-        logPush("  " .. obj.ClassName .. " -> " .. obj.Name)
-        for _, child in ipairs(obj:GetChildren()) do
-            local val = ""
-            pcall(function() val = tostring(child.Value) end)
-            logPush("    " .. child.Name .. " [" .. child.ClassName .. "] " .. val)
-        end
-    end
-
-    -- Workspace top-level
-    logPush("\n-- WORKSPACE STRUCTURE")
-    for _, obj in ipairs(game:GetService("Workspace"):GetChildren()) do
-        logPush("  " .. obj.ClassName .. " -> " .. obj.Name)
-    end
-
-    logPush("\n=== END ===")
-    setStatus("Full dump complete", Color3.fromRGB(100,220,140))
-    updateLogDisplay()
+    lp("\n=== END ===")
+    ss("Dump done", Color3.fromRGB(90,210,120))
     openLog()
 end
 
-local function openLogPanel()
-    updateLogDisplay()
-    openLog()
-end
-
--- === BUTTONS ===
-MakeButton("💰", "Get Money",    "Inject currency",         Color3.fromRGB(40,130,70),  injectMoney)
-MakeButton("📦", "Dupe Items",   "Clone backpack items",    Color3.fromRGB(60,70,180),  dupeItems)
-MakeButton("📋", "Dump Inv",     "Print inventory to log",  Color3.fromRGB(140,50,50),  dumpInventory)
-MakeButton("🔍", "Full Dump",    "All remotes + open log",  Color3.fromRGB(90,50,140),  fullDump)
-MakeButton("📜", "Log",          "View full output log",    Color3.fromRGB(40,80,120),  openLogPanel)
+-- === WIRE ===
+btn("💰","Money",        Color3.fromRGB(36,110,60),  doMoney)
+btn("📦","Dupe",         Color3.fromRGB(50,60,160),  doDupe)
+btn("🎰","Spin Wheel",   Color3.fromRGB(120,50,140), doSpin)
+btn("📅","Calendar",     Color3.fromRGB(140,80,20),  doCalendar)
+btn("👥","Group Reward", Color3.fromRGB(20,90,120),  doGroupReward)
+btn("🎟","Codes",        Color3.fromRGB(100,36,36),  doCode)
+btn("🔍","Full Dump",    Color3.fromRGB(40,40,70),   doFullDump)
+btn("📜","Log",          Color3.fromRGB(28,28,50),   openLog)
