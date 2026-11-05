@@ -115,12 +115,92 @@ DumpBtn.TextSize = 13
 DumpBtn.BorderSizePixel = 0
 Instance.new("UICorner", DumpBtn).CornerRadius = UDim.new(0, 8)
 
--- === CLEAR BUTTON ===
-local ClrBtn = Instance.new("TextButton", F)
-ClrBtn.Size = UDim2.new(1, -12, 0, 28)
-ClrBtn.Position = UDim2.new(0, 6, 0, 84)
+-- === LOG BUTTON ===
+local LogBtn = Instance.new("TextButton", F)
+LogBtn.Size = UDim2.new(1, -12, 0, 32)
+LogBtn.Position = UDim2.new(0, 6, 0, 84)
+LogBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 90)
+LogBtn.Text = "📄  Лог"
+LogBtn.TextColor3 = Color3.new(1, 1, 1)
+LogBtn.Font = Enum.Font.GothamBold
+LogBtn.TextSize = 13
+LogBtn.BorderSizePixel = 0
+Instance.new("UICorner", LogBtn).CornerRadius = UDim.new(0, 8)
+
+-- === LOG WINDOW (такое же окно, как меню) ===
+local LF = Instance.new("Frame", SG)
+LF.Size = UDim2.new(0, 300, 1, -80)
+LF.Position = UDim2.new(0, 316, 0, 60)
+LF.BackgroundColor3 = Color3.fromRGB(8, 8, 16)
+LF.BorderSizePixel = 0
+LF.ClipsDescendants = true
+LF.Visible = false
+Instance.new("UICorner", LF).CornerRadius = UDim.new(0, 12)
+local lfs = Instance.new("UIStroke", LF)
+lfs.Color = Color3.fromRGB(70, 50, 140)
+lfs.Thickness = 1
+
+-- drag для окна лога
+local ldrag, lds, ldp = false, nil, nil
+LF.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch
+    or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        ldrag = true; lds = i.Position; ldp = LF.Position
+    end
+end)
+LF.InputChanged:Connect(function(i)
+    if ldrag and (i.UserInputType == Enum.UserInputType.Touch
+    or i.UserInputType == Enum.UserInputType.MouseButton1) then
+        local d = i.Position - lds
+        LF.Position = UDim2.new(ldp.X.Scale, ldp.X.Offset + d.X,
+                                ldp.Y.Scale, ldp.Y.Offset + d.Y)
+    end
+end)
+LF.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch
+    or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        ldrag = false
+    end
+end)
+
+-- title bar окна лога
+local LTB = Instance.new("Frame", LF)
+LTB.Size = UDim2.new(1, 0, 0, 36)
+LTB.BackgroundColor3 = Color3.fromRGB(22, 16, 48)
+LTB.BorderSizePixel = 0
+Instance.new("UICorner", LTB).CornerRadius = UDim.new(0, 12)
+
+local LTL = Instance.new("TextLabel", LTB)
+LTL.Size = UDim2.new(1, -44, 1, 0)
+LTL.Position = UDim2.new(0, 10, 0, 0)
+LTL.BackgroundTransparency = 1
+LTL.TextColor3 = Color3.fromRGB(190, 160, 255)
+LTL.Text = "📄 Лог"
+LTL.Font = Enum.Font.GothamBold
+LTL.TextSize = 13
+LTL.TextXAlignment = Enum.TextXAlignment.Left
+
+local LXB = Instance.new("TextButton", LTB)
+LXB.Size = UDim2.new(0, 28, 0, 28)
+LXB.Position = UDim2.new(1, -32, 0, 4)
+LXB.BackgroundColor3 = Color3.fromRGB(160, 36, 54)
+LXB.Text = "✕"
+LXB.TextColor3 = Color3.new(1, 1, 1)
+LXB.Font = Enum.Font.GothamBold
+LXB.TextSize = 12
+Instance.new("UICorner", LXB).CornerRadius = UDim.new(0, 6)
+LXB.MouseButton1Up:Connect(function() LF.Visible = false end)
+
+LogBtn.MouseButton1Up:Connect(function()
+    LF.Visible = not LF.Visible
+end)
+
+-- === CLEAR BUTTON (в окне лога) ===
+local ClrBtn = Instance.new("TextButton", LF)
+ClrBtn.Size = UDim2.new(1, -12, 0, 30)
+ClrBtn.Position = UDim2.new(0, 6, 0, 42)
 ClrBtn.BackgroundColor3 = Color3.fromRGB(60, 20, 20)
-ClrBtn.Text = "🗑  Clear Log"
+ClrBtn.Text = "🗑  Очистить лог"
 ClrBtn.TextColor3 = Color3.new(1, 1, 1)
 ClrBtn.Font = Enum.Font.GothamSemibold
 ClrBtn.TextSize = 12
@@ -128,10 +208,10 @@ ClrBtn.BorderSizePixel = 0
 Instance.new("UICorner", ClrBtn).CornerRadius = UDim.new(0, 8)
 ClrBtn.MouseButton1Up:Connect(function() lc() end)
 
--- === LOG SCROLL ===
-local LogScr = Instance.new("ScrollingFrame", F)
-LogScr.Size = UDim2.new(1, -8, 1, -162)
-LogScr.Position = UDim2.new(0, 4, 0, 118)
+-- === LOG SCROLL (в окне лога) ===
+local LogScr = Instance.new("ScrollingFrame", LF)
+LogScr.Size = UDim2.new(1, -8, 1, -164)
+LogScr.Position = UDim2.new(0, 4, 0, 78)
 LogScr.BackgroundColor3 = Color3.fromRGB(6, 6, 12)
 LogScr.BorderSizePixel = 0
 LogScr.ScrollBarThickness = 3
@@ -140,7 +220,10 @@ LogScr.CanvasSize = UDim2.new(0, 0, 0, 0)
 LogScr.AutomaticCanvasSize = Enum.AutomaticSize.Y
 Instance.new("UICorner", LogScr).CornerRadius = UDim.new(0, 8)
 local LPad = Instance.new("UIPadding", LogScr)
-LPad.PaddingAll = UDim.new(0, 6)
+LPad.PaddingLeft = UDim.new(0, 6)
+LPad.PaddingRight = UDim.new(0, 6)
+LPad.PaddingTop = UDim.new(0, 6)
+LPad.PaddingBottom = UDim.new(0, 6)
 
 LogText = Instance.new("TextLabel", LogScr)
 LogText.Size = UDim2.new(1, 0, 0, 0)
@@ -154,8 +237,8 @@ LogText.TextYAlignment = Enum.TextYAlignment.Top
 LogText.TextWrapped = true
 LogText.Text = "(пусто — нажми Run Ultra Dump)"
 
--- === COPY BUTTON ===
-local CopyBtn = Instance.new("TextButton", F)
+-- === COPY BUTTON (в окне лога) ===
+local CopyBtn = Instance.new("TextButton", LF)
 CopyBtn.Size = UDim2.new(1, -12, 0, 36)
 CopyBtn.Position = UDim2.new(0, 6, 1, -42)
 CopyBtn.BackgroundColor3 = Color3.fromRGB(36, 100, 60)
@@ -482,7 +565,6 @@ local function doFullDump()
             dumpObj(pd, 2)
         end
     end)
-
 
     -- ══════════════════════════════════════════════════════════════
     -- ── 15. SCRIPT SOURCE DUMP / DECOMPILE ATTEMPT (NEW) ─────────
