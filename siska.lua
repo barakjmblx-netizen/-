@@ -1,162 +1,84 @@
--- ╔══════════════════════════════════════════════╗
--- ║  Piska.lua v2 — Farm + Stat Injector         ║
--- ║  Game: 120219252362013                       ║
--- ╚══════════════════════════════════════════════╝
+-- ╔══════════════════════════════════════════╗
+-- ║  Piska.lua — Auto Farm                   ║
+-- ║  Game: 120219252362013                   ║
+-- ║  Target: Throw Power + Money Auto Farm   ║
+-- ╚══════════════════════════════════════════╝
 
-local Players           = game:GetService("Players")
+local Players       = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local UserInputService  = game:GetService("UserInputService")
+local RunService    = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
-local lp      = Players.LocalPlayer
+local lp = Players.LocalPlayer
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 
 -- ╔══════════════╗
 -- ║    CONFIG    ║
 -- ╚══════════════╝
 local CFG = {
-    -- Farm toggles
-    AutoTrain       = true,
-    AutoSellAll     = true,
-    AutoEquipBest   = true,
-    AutoThrow       = false,
-
-    -- Stat Injector
-    AutoInjectStats = true,
-    InjectInterval  = 2.0,       -- каждые N секунд
-    TargetPower     = 999999,    -- Throw Power цель
-    TargetMoney     = "$999M",   -- отображаемое значение (строка как в игре)
+    -- Toggles
+    AutoTrain     = true,
+    AutoSellAll   = true,
+    AutoThrow     = false,
+    AutoEquipBest = true,
 
     -- Timing
-    TrainDelay      = 0.05,
-    SellDelay       = 5.0,
-    ThrowDelay      = 0.1,
+    TrainDelay    = 0.05,  -- seconds between TapBonus calls
+    SellDelay     = 5.0,   -- seconds between SellAll calls
+    ThrowDelay    = 0.1,
 
-    ToggleKey       = Enum.KeyCode.RightControl,
+    -- Keys
+    ToggleKey     = Enum.KeyCode.RightControl,
+
+    -- UI
+    ShowGui       = true,
 }
 
 -- ╔══════════════════╗
 -- ║  REMOTE HELPERS  ║
 -- ╚══════════════════╝
+local function getRemote(name)
+    return Remotes:FindFirstChild(name)
+end
+
 local function invokeRF(name, ...)
-    local rf = Remotes:FindFirstChild(name)
+    local rf = getRemote(name)
     if rf and rf:IsA("RemoteFunction") then
-        local ok, res = pcall(rf.InvokeServer, rf, ...)
+        local ok, res = pcall(function() return rf:InvokeServer(...) end)
         if ok then return res end
     end
 end
 
 local function fireRE(name, ...)
-    local re = Remotes:FindFirstChild(name)
+    local re = getRemote(name)
     if re and re:IsA("RemoteEvent") then
-        pcall(re.FireServer, re, ...)
+        pcall(function() re:FireServer(...) end)
     end
-end
-
--- ╔══════════════════════════════╗
--- ║   STAT INJECTOR              ║
--- ║   Три слоя: RF → RE → Local  ║
--- ╚══════════════════════════════╝
-
--- Слой 1: Player_SetThrowPower — прямой RF на сервер
-local function injectViaRF()
-    invokeRF("Player_SetThrowPower", CFG.TargetPower)
-end
-
--- Слой 2: ReplicaWrite — пишем в реплику напрямую
--- ReplicaService хранит данные как {[path] = value}
--- Пробуем записать через RE который сервер слушает
-local function injectViaReplica()
-    -- ReplicaWrite path формат зависит от игры, пробуем стандартный
-    local replicaWrite = ReplicatedStorage.RemoteEvents:FindFirstChild("ReplicaWrite")
-    if replicaWrite then
-        pcall(function()
-            replicaWrite:FireServer({
-                Path = {"Stats", "ThrowPower"},
-                Value = CFG.TargetPower
-            })
-        end)
-        pcall(function()
-            replicaWrite:FireServer({
-                Path = {"Currency", "Money"},
-                Value = 999000000
-            })
-        end)
-    end
-end
-
--- Слой 3: Локальный патч leaderstats (визуально + некоторые игры читают обратно)
-local function patchLeaderstats()
-    local stats = lp:FindFirstChild("leaderstats")
-    if not stats then return end
-
-    local power = stats:FindFirstChild("Throw Power")
-    local money = stats:FindFirstChild("Money")
-    local mps   = stats:FindFirstChild("Money/s")
-
-    if power then
-        pcall(function() power.Value = CFG.TargetPower end)
-    end
-    if money then
-        pcall(function() money.Value = CFG.TargetMoney end)
-    end
-    if mps then
-        pcall(function() mps.Value = "$99.9M/s" end)
-    end
-end
-
--- Слой 4: Dev_Action — если у нас есть доступ (admin remote)
-local function tryDevAction()
-    -- Пробуем разные форматы — игра сама отфильтрует
-    local actions = {
-        {Action = "SetMoney",  Amount = 999000000},
-        {Action = "GiveMoney", Amount = 999000000},
-        {Action = "SetPower",  Value  = CFG.TargetPower},
-        {Action = "AddPower",  Amount = CFG.TargetPower},
-        {action = "set_money", value  = 999000000},
-        {action = "set_power", value  = CFG.TargetPower},
-    }
-    for _, payload in ipairs(actions) do
-        invokeRF("Dev_Action", payload)
-        task.wait(0.05)
-    end
-end
-
--- Слой 5: Player_SetSetting — иногда игры хранят там всё
-local function injectViaSetting()
-    invokeRF("Player_SetSetting", "ThrowPower", CFG.TargetPower)
-    invokeRF("Player_SetSetting", "Money",      999000000)
-end
-
--- Мастер-инжектор — стреляем всеми слоями
-local function runStatInjector()
-    task.spawn(function()
-        while CFG.AutoInjectStats do
-            injectViaRF()
-            injectViaReplica()
-            patchLeaderstats()
-            injectViaSetting()
-            tryDevAction()
-            task.wait(CFG.InjectInterval)
-        end
-    end)
 end
 
 -- ╔══════════════════╗
 -- ║   FARM MODULES   ║
 -- ╚══════════════════╝
+
+-- AUTO TRAINING (Throw Power grind)
 local trainActive = false
 local function autoTrain()
-    if not CFG.AutoTrain or trainActive then return end
+    if not CFG.AutoTrain then return end
+    if trainActive then return end
     trainActive = true
+
     task.spawn(function()
         while CFG.AutoTrain do
-            local ok = invokeRF("Training_Start")
-            if ok then
+            -- Start training session
+            local started = invokeRF("Training_Start")
+            if started then
+                -- Spam TapBonus как можно быстрее
                 for _ = 1, 50 do
                     if not CFG.AutoTrain then break end
                     invokeRF("Training_TapBonus")
                     task.wait(CFG.TrainDelay)
                 end
+                -- Stop и получаем награду
                 invokeRF("Training_Stop")
             end
             task.wait(0.3)
@@ -165,6 +87,7 @@ local function autoTrain()
     end)
 end
 
+-- AUTO SELL ALL
 local function autoSellAll()
     task.spawn(function()
         while CFG.AutoSellAll do
@@ -174,6 +97,7 @@ local function autoSellAll()
     end)
 end
 
+-- AUTO EQUIP BEST ANIMAL
 local function autoEquipBest()
     task.spawn(function()
         while CFG.AutoEquipBest do
@@ -183,13 +107,14 @@ local function autoEquipBest()
     end)
 end
 
+-- AUTO THROW
 local function autoThrow()
     task.spawn(function()
         while CFG.AutoThrow do
-            local data = invokeRF("Throw_Start")
-            if data then
+            local throwData = invokeRF("Throw_Start")
+            if throwData then
                 task.wait(0.05)
-                invokeRF("Throw_Resolve", data)
+                invokeRF("Throw_Resolve", throwData)
                 task.wait(0.05)
                 invokeRF("Throw_Complete")
             end
@@ -199,196 +124,185 @@ local function autoThrow()
 end
 
 -- ╔══════════════════╗
--- ║      GUI         ║
+-- ║   IMGUI / HUD    ║
 -- ╚══════════════════╝
-local labels = {}
+local gui, frame, labels = nil, nil, {}
 
 local function buildGui()
+    if not CFG.ShowGui then return end
+
+    -- Убираем старый если есть
     if lp.PlayerGui:FindFirstChild("ZFarm") then
         lp.PlayerGui:FindFirstChild("ZFarm"):Destroy()
     end
 
-    local gui = Instance.new("ScreenGui")
+    gui = Instance.new("ScreenGui")
     gui.Name = "ZFarm"
     gui.ResetOnSpawn = false
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Parent = lp.PlayerGui
 
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 235, 0, 265)
-    frame.Position = UDim2.new(0, 10, 0.5, -132)
-    frame.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+    frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 220, 0, 185)
+    frame.Position = UDim2.new(0, 10, 0.5, -90)
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
     frame.BorderSizePixel = 0
     frame.Active = true
     frame.Draggable = true
     frame.Parent = gui
 
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
 
-    local stroke = Instance.new("UIStroke", frame)
+    local stroke = Instance.new("UIStroke")
     stroke.Color = Color3.fromRGB(80, 160, 255)
     stroke.Thickness = 1.5
+    stroke.Parent = frame
 
-    -- Title bar
-    local title = Instance.new("TextLabel", frame)
-    title.Size = UDim2.new(1, 0, 0, 30)
-    title.BackgroundColor3 = Color3.fromRGB(20, 70, 170)
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 28)
+    title.BackgroundColor3 = Color3.fromRGB(30, 80, 180)
     title.BorderSizePixel = 0
-    title.Text = "  [Z] FARM v2  •  RCtrl toggle"
-    title.TextColor3 = Color3.fromRGB(220, 235, 255)
+    title.Text = "  [Z] FARM  •  " .. tostring(Enum.KeyCode.RightControl.Name) .. " toggle"
+    title.TextColor3 = Color3.fromRGB(220, 230, 255)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
     title.TextXAlignment = Enum.TextXAlignment.Left
-    Instance.new("UICorner", title).CornerRadius = UDim.new(0, 10)
+    title.Parent = frame
 
-    local pad = Instance.new("UIPadding", frame)
-    pad.PaddingTop    = UDim.new(0, 36)
-    pad.PaddingLeft   = UDim.new(0, 8)
-    pad.PaddingRight  = UDim.new(0, 8)
-    pad.PaddingBottom = UDim.new(0, 6)
+    local titleCorner = Instance.new("UICorner")
+    titleCorner.CornerRadius = UDim.new(0, 8)
+    titleCorner.Parent = title
 
-    local layout = Instance.new("UIListLayout", frame)
+    local layout = Instance.new("UIListLayout")
     layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding   = UDim.new(0, 3)
+    layout.Padding = UDim.new(0, 2)
+    layout.Parent = frame
 
-    -- Секция-разделитель
-    local function makeSection(text, order)
-        local lbl = Instance.new("TextLabel", frame)
-        lbl.Size = UDim2.new(1, 0, 0, 18)
-        lbl.BackgroundTransparency = 1
-        lbl.Text = "── " .. text .. " ──"
-        lbl.TextColor3 = Color3.fromRGB(100, 150, 255)
-        lbl.TextSize = 11
-        lbl.Font = Enum.Font.GothamBold
-        lbl.TextXAlignment = Enum.TextXAlignment.Center
-        lbl.LayoutOrder = order
-    end
+    local pad = Instance.new("UIPadding")
+    pad.PaddingTop = UDim.new(0, 32)
+    pad.PaddingLeft = UDim.new(0, 8)
+    pad.PaddingRight = UDim.new(0, 8)
+    pad.Parent = frame
 
-    -- Toggle строка
-    local function makeToggle(labelText, cfgKey, order, onToggle)
-        local row = Instance.new("Frame", frame)
+    local function makeToggle(labelText, cfgKey)
+        local row = Instance.new("Frame")
         row.Size = UDim2.new(1, 0, 0, 28)
         row.BackgroundTransparency = 1
-        row.LayoutOrder = order
+        row.LayoutOrder = #labels + 1
+        row.Parent = frame
 
-        local lbl = Instance.new("TextLabel", row)
-        lbl.Size = UDim2.new(0.68, 0, 1, 0)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(0.7, 0, 1, 0)
         lbl.BackgroundTransparency = 1
         lbl.Text = labelText
-        lbl.TextColor3 = Color3.fromRGB(200, 205, 220)
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 220)
         lbl.TextSize = 13
         lbl.Font = Enum.Font.Gotham
         lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = row
 
-        local btn = Instance.new("TextButton", row)
-        btn.Size = UDim2.new(0.3, 0, 0.78, 0)
-        btn.Position = UDim2.new(0.7, 0, 0.11, 0)
-        btn.BackgroundColor3 = CFG[cfgKey]
-            and Color3.fromRGB(35, 170, 85)
-            or  Color3.fromRGB(170, 45, 45)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0.28, 0, 0.8, 0)
+        btn.Position = UDim2.new(0.72, 0, 0.1, 0)
+        btn.BackgroundColor3 = CFG[cfgKey] and Color3.fromRGB(40, 180, 90) or Color3.fromRGB(180, 50, 50)
         btn.Text = CFG[cfgKey] and "ON" or "OFF"
         btn.TextColor3 = Color3.fromRGB(255, 255, 255)
         btn.TextSize = 12
         btn.Font = Enum.Font.GothamBold
         btn.BorderSizePixel = 0
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+        btn.Parent = row
+
+        local bc = Instance.new("UICorner")
+        bc.CornerRadius = UDim.new(0, 4)
+        bc.Parent = btn
 
         btn.MouseButton1Click:Connect(function()
             CFG[cfgKey] = not CFG[cfgKey]
-            btn.BackgroundColor3 = CFG[cfgKey]
-                and Color3.fromRGB(35, 170, 85)
-                or  Color3.fromRGB(170, 45, 45)
+            btn.BackgroundColor3 = CFG[cfgKey] and Color3.fromRGB(40, 180, 90) or Color3.fromRGB(180, 50, 50)
             btn.Text = CFG[cfgKey] and "ON" or "OFF"
-            if onToggle then onToggle(CFG[cfgKey]) end
+            -- реинициализируем если включили
+            if cfgKey == "AutoTrain" and CFG.AutoTrain then autoTrain() end
+            if cfgKey == "AutoSellAll" and CFG.AutoSellAll then autoSellAll() end
+            if cfgKey == "AutoEquipBest" and CFG.AutoEquipBest then autoEquipBest() end
+            if cfgKey == "AutoThrow" and CFG.AutoThrow then autoThrow() end
         end)
 
-        table.insert(labels, {btn = btn, key = cfgKey})
+        table.insert(labels, btn)
     end
 
-    makeSection("FARM",        1)
-    makeToggle("Auto Train",       "AutoTrain",       2, function(v) if v then autoTrain() end end)
-    makeToggle("Auto Sell All",    "AutoSellAll",     3, function(v) if v then autoSellAll() end end)
-    makeToggle("Auto Equip Best",  "AutoEquipBest",   4, function(v) if v then autoEquipBest() end end)
-    makeToggle("Auto Throw",       "AutoThrow",       5, function(v) if v then autoThrow() end end)
+    makeToggle("Auto Train (Throw Pwr)", "AutoTrain")
+    makeToggle("Auto Sell All",          "AutoSellAll")
+    makeToggle("Auto Equip Best",        "AutoEquipBest")
+    makeToggle("Auto Throw",             "AutoThrow")
 
-    makeSection("STAT INJECT",    6)
-    makeToggle("💉 Inject Stats",  "AutoInjectStats", 7, function(v) if v then runStatInjector() end end)
+    -- Статус строка (money/s и power)
+    local statusLbl = Instance.new("TextLabel")
+    statusLbl.Name = "Status"
+    statusLbl.Size = UDim2.new(1, 0, 0, 22)
+    statusLbl.BackgroundTransparency = 1
+    statusLbl.TextColor3 = Color3.fromRGB(120, 200, 120)
+    statusLbl.TextSize = 11
+    statusLbl.Font = Enum.Font.Gotham
+    statusLbl.LayoutOrder = 99
+    statusLbl.Parent = frame
 
-    -- Live stats display
-    local statsBox = Instance.new("Frame", frame)
-    statsBox.Size = UDim2.new(1, 0, 0, 52)
-    statsBox.BackgroundColor3 = Color3.fromRGB(20, 22, 32)
-    statsBox.BorderSizePixel = 0
-    statsBox.LayoutOrder = 8
-    Instance.new("UICorner", statsBox).CornerRadius = UDim.new(0, 6)
-
-    local statsPad = Instance.new("UIPadding", statsBox)
-    statsPad.PaddingLeft  = UDim.new(0, 8)
-    statsPad.PaddingTop   = UDim.new(0, 4)
-
-    local statsLbl = Instance.new("TextLabel", statsBox)
-    statsLbl.Size = UDim2.new(1, -8, 1, -4)
-    statsLbl.BackgroundTransparency = 1
-    statsLbl.TextColor3 = Color3.fromRGB(100, 220, 130)
-    statsLbl.TextSize = 12
-    statsLbl.Font = Enum.Font.Code
-    statsLbl.TextXAlignment = Enum.TextXAlignment.Left
-    statsLbl.TextYAlignment = Enum.TextYAlignment.Top
-    statsLbl.TextWrapped = true
-
-    -- Обновляем stats label
+    -- Обновляем статус каждую секунду
     task.spawn(function()
         while gui and gui.Parent do
-            local s = lp:FindFirstChild("leaderstats")
-            if s then
-                statsLbl.Text = string.format(
-                    "💰 %s\n⚡ Power: %s\n📈 %s",
-                    s:FindFirstChild("Money")        and s.Money.Value        or "—",
-                    s:FindFirstChild("Throw Power")  and s["Throw Power"].Value or "—",
-                    s:FindFirstChild("Money/s")      and s["Money/s"].Value   or "—"
+            local stats = lp:FindFirstChild("leaderstats")
+            if stats then
+                local money = stats:FindFirstChild("Money")
+                local power = stats:FindFirstChild("Throw Power")
+                local mps   = stats:FindFirstChild("Money/s")
+                statusLbl.Text = string.format(
+                    "💰 %s  ⚡ %s  📈 %s",
+                    money and money.Value or "?",
+                    power and power.Value or "?",
+                    mps   and mps.Value   or "?"
                 )
             end
-            task.wait(0.5)
+            task.wait(1)
         end
     end)
 end
 
 -- ╔══════════════════╗
--- ║   HOTKEY          ║
+-- ║  HOTKEY TOGGLE   ║
 -- ╚══════════════════╝
-local allOn = true
+local farmEnabled = true
+
 UserInputService.InputBegan:Connect(function(input, gpe)
     if gpe then return end
     if input.KeyCode == CFG.ToggleKey then
-        allOn = not allOn
-        CFG.AutoTrain       = allOn
-        CFG.AutoSellAll     = allOn
-        CFG.AutoEquipBest   = allOn
-        CFG.AutoInjectStats = allOn
-        for _, t in ipairs(labels) do
-            local v = CFG[t.key]
-            t.btn.BackgroundColor3 = v
-                and Color3.fromRGB(35, 170, 85)
-                or  Color3.fromRGB(170, 45, 45)
-            t.btn.Text = v and "ON" or "OFF"
+        farmEnabled = not farmEnabled
+        CFG.AutoTrain     = farmEnabled
+        CFG.AutoSellAll   = farmEnabled
+        CFG.AutoEquipBest = farmEnabled
+        -- обновляем кнопки
+        for i, btn in ipairs(labels) do
+            btn.BackgroundColor3 = farmEnabled and Color3.fromRGB(40,180,90) or Color3.fromRGB(180,50,50)
+            btn.Text = farmEnabled and "ON" or "OFF"
         end
-        if allOn then
-            autoTrain(); autoSellAll()
-            autoEquipBest(); runStatInjector()
+        if farmEnabled then
+            autoTrain()
+            autoSellAll()
+            autoEquipBest()
         end
     end
 end)
 
 -- ╔══════════════════╗
--- ║      INIT        ║
+-- ║     INIT         ║
 -- ╚══════════════════╝
-task.wait(1.5)
+task.wait(1) -- дать игре загрузиться
+
 buildGui()
 
-if CFG.AutoTrain       then autoTrain()        end
-if CFG.AutoSellAll     then autoSellAll()       end
-if CFG.AutoEquipBest   then autoEquipBest()     end
-if CFG.AutoThrow       then autoThrow()         end
-if CFG.AutoInjectStats then runStatInjector()   end
+if CFG.AutoTrain     then autoTrain()     end
+if CFG.AutoSellAll   then autoSellAll()   end
+if CFG.AutoEquipBest then autoEquipBest() end
+if CFG.AutoThrow     then autoThrow()     end
 
-print("[Z] v2 loaded — farm + stat injector active")
+print("[Z] Farm loaded — RightCtrl to toggle all")
