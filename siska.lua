@@ -25,6 +25,56 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService  = game:GetService("UserInputService")
 local RunService        = game:GetService("RunService")
 
+-- ╔══════════════════════════════════════════════════╗
+-- ║  LOG (siska_log.txt)                             ║
+-- ║  Пишется сразу на диск перед каждым шагом —      ║
+-- ║  последняя строка покажет, где упало.            ║
+-- ╚══════════════════════════════════════════════════╝
+local LOG_FILE = "siska_log.txt"
+local logBuf   = {}          -- запасной вариант, если нет appendfile
+local t0       = os.clock()
+local function log(msg)
+    local line = string.format("[%s +%7.2fs] %s", os.date("%H:%M:%S"), os.clock() - t0, tostring(msg))
+    if appendfile then
+        pcall(appendfile, LOG_FILE, line .. "\n")
+    elseif writefile then
+        logBuf[#logBuf+1] = line
+        pcall(writefile, LOG_FILE, table.concat(logBuf, "\n"))
+    end
+end
+do  -- новый лог на каждый запуск
+    if writefile then
+        local exec = "?"
+        if identifyexecutor then pcall(function() exec = tostring(identifyexecutor()) end) end
+        pcall(writefile, LOG_FILE, "=== Piska v7 log | executor: " .. exec
+            .. " | PlaceVersion: " .. tostring(game.PlaceVersion) .. " ===\n")
+        logBuf[1] = "=== Piska v7 log ==="
+    end
+    log("script start")
+    log("API: hookfunction=" .. tostring(hookfunction ~= nil)
+        .. " getconnections=" .. tostring(getconnections ~= nil)
+        .. " newcclosure=" .. tostring(newcclosure ~= nil)
+        .. " appendfile=" .. tostring(appendfile ~= nil)
+        .. " readfile=" .. tostring(readfile ~= nil))
+    -- ошибки скриптов игры/нашего скрипта тоже в лог
+    pcall(function()
+        game:GetService("ScriptContext").Error:Connect(function(msg, trace)
+            log("LUA ERROR: " .. tostring(msg) .. " | " .. tostring(trace):sub(1, 200))
+        end)
+    end)
+    -- метка жизни: по последней метке видно, когда именно игра упала
+    task.spawn(function()
+        local n = 0
+        while true do
+            task.wait(3)
+            n += 1
+            local fps = 0
+            pcall(function() fps = math.floor(workspace:GetRealPhysicsFPS()) end)
+            log("alive #" .. n .. " physFPS=" .. fps)
+        end
+    end)
+end
+
 local lp      = Players.LocalPlayer
 local Remotes = ReplicatedStorage:WaitForChild("Remotes", 15)
 assert(Remotes, "[Z] Remotes not found")
@@ -79,11 +129,13 @@ local CONFIG_FILE = "siska_config.txt"
 local pendingRestore = {}   -- {функция запуска, ...} для включённых тумблеров
 
 local function loadConfig()
-    if not (isfile and readfile) then return end
+    log("loadConfig")
+    if not (isfile and readfile) then log("loadConfig: no isfile/readfile"); return end
     local ok, text = pcall(function()
         if isfile(CONFIG_FILE) then return readfile(CONFIG_FILE) end
     end)
-    if not ok or type(text) ~= "string" then return end
+    if not ok or type(text) ~= "string" then log("loadConfig: no config file (defaults)"); return end
+    log("loadConfig: file read, " .. #text .. " bytes")
     for line in text:gmatch("[^\r\n]+") do
         local k, v = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
         if k and CFG[k] ~= nil then
@@ -126,17 +178,24 @@ end
 -- ╔══════════════════╗
 -- ║  HELPERS         ║
 -- ╚══════════════════╝
+local seenRemote = {}
 local function rf(name, ...)
     local r = Remotes:FindFirstChild(name)
     if r and r:IsA("RemoteFunction") then
+        if not seenRemote[name] then seenRemote[name] = true; log("RF first call: " .. name) end
         local ok, res = pcall(r.InvokeServer, r, ...)
         if ok then return res end
+        log("RF error " .. name .. ": " .. tostring(res):sub(1, 150))
+    elseif not seenRemote["?" .. name] then
+        seenRemote["?" .. name] = true
+        log("RF not found: " .. name)
     end
 end
 
 local function re(name, ...)
     local r = Remotes:FindFirstChild(name)
     if r and r:IsA("RemoteEvent") then
+        if not seenRemote["e" .. name] then seenRemote["e" .. name] = true; log("RE first fire: " .. name) end
         pcall(r.FireServer, r, ...)
     end
 end
@@ -705,6 +764,7 @@ local function buildGui()
             CFG[cfgKey]=not CFG[cfgKey]
             btn.BackgroundColor3=CFG[cfgKey] and C.on or C.off
             btn.Text=CFG[cfgKey] and "ON" or "OFF"
+            log("toggle " .. cfgKey .. " = " .. tostring(CFG[cfgKey]))
             if onToggle then onToggle(CFG[cfgKey]) end
             saveConfig()
         end)
@@ -1092,27 +1152,37 @@ end
 
 local function safeHook(name, fn)
     if badHooks[name] then
+        log("hook SKIPPED (bad from previous crash): " .. name)
         print("[Z] хук " .. name .. " пропущен (из-за него был вылет). Сброс: удали " .. BOOT_FILE)
         return false
     end
     writeBoot(name)          -- если игра упадёт прямо сейчас — запомнится имя
-    local ok = pcall(fn)
+    log("hook START: " .. name)   -- если упало — это последняя строка лога
+    local ok, err = pcall(fn)
     writeBoot(nil)           -- прошло без вылета
+    log("hook " .. (ok and "OK: " or "ERROR: ") .. name .. (ok and "" or (" | " .. tostring(err))))
     return ok
 end
 
 -- Меню появляется сразу. Хуки ставятся в фоне, по одному, когда игра уже загрузилась.
 loadConfig()   -- подгружаем сохранённые настройки (если файла нет — всё по умолчанию)
 readBoot()
+log("readBoot: bad hooks from previous runs = " .. (next(badHooks) and "yes" or "none"))
 if pendingHook then
+    log("PREVIOUS RUN CRASHED ON HOOK: " .. pendingHook)
     print("[Z] прошлый запуск вылетел на хуке: " .. pendingHook .. " — он отключён")
 end
 writeBoot(nil)
-buildGui()
+log("buildGui: start")
+local okGui, errGui = pcall(buildGui)
+log("buildGui: " .. (okGui and "ok" or ("ERROR " .. tostring(errGui))))
 task.spawn(function()
+    log("init: waiting for game load")
     if not game:IsLoaded() then game.Loaded:Wait() end
     task.wait(3)                       -- даём игре полностью прогрузиться
+    log("init: game loaded, setupGuiWatcher")
     pcall(setupGuiWatcher)             -- авто-скрытие TrainingSequence / ThrowSequence
+    log("init: setupReturnBlock")
     pcall(setupReturnBlock)            -- блокируем return TP при броске
     task.wait(1)
     safeHook("ReplicaSet", hookReplicaSet)   -- патч ReplicaSet для stat inject
@@ -1122,13 +1192,19 @@ task.spawn(function()
     safeHook("newindex", hookNewindex)       -- патч __newindex (самый рискованный — последним)
     task.wait(1)
     task.spawn(setupTrainingBonusHook)  -- WaitForChild внутри, не блокирует
+    log("hooks: ReplicaSet=" .. tostring(replicaHooked) .. " newindex=" .. tostring(niHooked)
+        .. " throw=" .. tostring(throwHooked))
     print("[Z] Hooks: ReplicaSet=" .. (replicaHooked and "✓" or "✗")
         .. "  __newindex=" .. (niHooked and "✓" or "✗")
         .. "  throwHook=" .. (throwHooked and "✓" or "✗"))
     -- запускаем то, что было включено в сохранённом конфиге (после установки хуков)
-    for _, start in ipairs(pendingRestore) do
-        pcall(start)
+    log("restore: " .. #pendingRestore .. " toggle(s) from config")
+    for idx, start in ipairs(pendingRestore) do
+        log("restore START #" .. idx)
+        local ok, err = pcall(start)
+        log("restore " .. (ok and "OK" or ("ERROR | " .. tostring(err))) .. " #" .. idx)
         task.wait(0.3)
     end
+    log("init finished")
 end)
-print("[Z] v7.0 Ghost loaded ✓  |  RCtrl = show/hide")
+print("[Z] v7.0 Ghost loaded ✓  |  RCtrl = show/hide  |  log: " .. LOG_FILE)
