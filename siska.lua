@@ -50,7 +50,7 @@ do  -- новый лог на каждый запуск
             .. " | PlaceVersion: " .. tostring(game.PlaceVersion) .. " ===\n")
         logBuf[1] = "=== Piska v7 log ==="
     end
-    log("script start")
+    log("script start | build r5: ReplicaSet via Disable, no hookfunction")
     log("API: hookfunction=" .. tostring(hookfunction ~= nil)
         .. " getconnections=" .. tostring(getconnections ~= nil)
         .. " newcclosure=" .. tostring(newcclosure ~= nil)
@@ -270,31 +270,33 @@ end
 local replicaHooked = false
 local function hookReplicaSet()
     if replicaHooked then return end
-    pcall(function()
+    local ok, err = pcall(function()
+        log("RS 1: find remote")
         local reRE = ReplicatedStorage:FindFirstChild("RemoteEvents")
-        if not reRE then log("ReplicaSet: RemoteEvents folder not found"); return end
+        if not reRE then log("RS: RemoteEvents folder not found"); return end
         local rsRE = reRE:FindFirstChild("ReplicaSet")
-        if not rsRE then log("ReplicaSet: remote not found"); return end
-        if not getconnections then return end
+        if not rsRE then log("RS: ReplicaSet remote not found"); return end
+        if not getconnections then log("RS: no getconnections"); return end
 
-        -- БЕЗ hookfunction (он зацикливался: orig после хука указывал на сам хук).
-        -- Вместо этого: отключаем оригинальный обработчик и подключаем свой,
-        -- который патчит значение и вызывает оригинал.
+        log("RS 2: getconnections")
         local conns = getconnections(rsRE.OnClientEvent)
-        local originals = {}
-        for _, conn in ipairs(conns) do
-            local fn = conn.Function
-            if type(fn) == "function" then
-                originals[#originals+1] = fn
-                pcall(function() conn:Disable() end)
-            end
-        end
-        log("ReplicaSet: handlers wrapped = " .. #originals)
-        if #originals == 0 then return end
+        log("RS 3: connections found = " .. tostring(conns and #conns))
 
+        -- собираем оригинальные обработчики (ничего пока не отключаем)
+        local list = {}
+        for i, conn in ipairs(conns) do
+            local okF, fn = pcall(function() return conn.Function end)
+            log("RS 4: conn #" .. i .. " Function=" .. (okF and type(fn) or "ERR"))
+            if okF and type(fn) == "function" then list[#list+1] = {conn = conn, fn = fn} end
+        end
+        if #list == 0 then log("RS: nothing to wrap"); return end
+
+        -- 1) сначала подключаем СВОЙ обработчик
+        local originals = {}   -- заполняется только теми, кого реально удалось отключить
         local firstFire = true
+        log("RS 5: connect own handler")
         rsRE.OnClientEvent:Connect(function(repId, path, value, ...)
-            if firstFire then firstFire = false; log("ReplicaSet: first event received") end
+            if firstFire then firstFire = false; log("RS: first event received") end
             if CFG.AutoInjectStats and type(path) == "table" then
                 local f = path[1]
                 if f == "Money"      then value = CFG.StatMoneyRaw end
@@ -302,12 +304,22 @@ local function hookReplicaSet()
                 if f == "ThrowPower" or f == "Throw Power" then value = CFG.StatPower end
             end
             for _, fn in ipairs(originals) do
-                local ok, err = pcall(fn, repId, path, value, ...)
-                if not ok then log("ReplicaSet handler error: " .. tostring(err):sub(1, 150)) end
+                local okC, e = pcall(fn, repId, path, value, ...)
+                if not okC then log("RS handler error: " .. tostring(e):sub(1, 150)) end
             end
         end)
-        replicaHooked = true
+
+        -- 2) потом по одному отключаем оригинальные и сразу передаём их нашему обработчику
+        for i, item in ipairs(list) do
+            log("RS 6: disable #" .. i)
+            local okD = pcall(function() item.conn:Disable() end)
+            if okD then originals[#originals+1] = item.fn end
+            log("RS 6: disable #" .. i .. (okD and " ok" or " FAILED (оставлен как есть)"))
+        end
+        log("RS 7: done, wrapped = " .. #originals)
+        replicaHooked = #originals > 0
     end)
+    if not ok then log("RS ERROR: " .. tostring(err)) end
 end
 
 -- ╔══════════════════════════════════════════════════╗
