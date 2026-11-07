@@ -10,19 +10,60 @@ pcall(function()
     game:GetService("CoreGui"):FindFirstChild("PIMMenu"):Destroy()
 end)
 
--- === LOG ===
+-- === LOG STATE ===
 local logBuf = {}
 local LogText
+local autoSave = false          -- переключатель авто-сохранения
+local DUMP_DIR = "/storage/emulated/0/Delta/Dump/"
 
+-- ── Запись строки в файл (Delta / writefile) ──────────────────────
+local _autoFile = nil  -- текущий путь файла для авто-записи
+local function getAutoFilePath()
+    if _autoFile then return _autoFile end
+    -- Создаём имя по timestamp
+    local ts = os.date and os.date("%Y%m%d_%H%M%S") or tostring(tick()):gsub("%.", "_")
+    _autoFile = DUMP_DIR .. "dump_" .. ts .. ".txt"
+    return _autoFile
+end
+
+local function writeLineToFile(line)
+    if not (writefile and isfolder and makefolder) then return end
+    pcall(function()
+        if not isfolder(DUMP_DIR) then makefolder(DUMP_DIR) end
+        local path = getAutoFilePath()
+        local ok, existing = pcall(readfile, path)
+        local content = (ok and existing or "") .. line .. "\n"
+        writefile(path, content)
+    end)
+end
+
+local function saveFullLog(path)
+    if not writefile then return false, "writefile недоступен" end
+    local ok, err = pcall(function()
+        if isfolder and makefolder then
+            if not isfolder(DUMP_DIR) then makefolder(DUMP_DIR) end
+        end
+        writefile(path, table.concat(logBuf, "\n"))
+    end)
+    return ok, err
+end
+
+-- ── Батчинг обновлений UI ─────────────────────────────────────────
+local _logDirty = false
 local function lp(s)
     table.insert(logBuf, s)
     print(s)
-    if LogText then
-        LogText.Text = table.concat(logBuf, "\n")
+    if autoSave then writeLineToFile(s) end
+    if LogText and not _logDirty then
+        _logDirty = true
         task.defer(function()
-            local scr = LogText.Parent
-            if scr and scr:IsA("ScrollingFrame") then
-                scr.CanvasPosition = Vector2.new(0, 1e9)
+            _logDirty = false
+            if LogText then
+                LogText.Text = table.concat(logBuf, "\n")
+                local scr = LogText.Parent
+                if scr and scr:IsA("ScrollingFrame") then
+                    scr.CanvasPosition = Vector2.new(0, 1e9)
+                end
             end
         end)
     end
@@ -30,10 +71,13 @@ end
 
 local function lc()
     logBuf = {}
+    _autoFile = nil   -- сбрасываем путь авто-файла при очистке
     if LogText then LogText.Text = "(пусто)" end
 end
 
--- === ROOT ===
+-- ================================================================
+-- ROOT GUI
+-- ================================================================
 local SG = Instance.new("ScreenGui")
 SG.Name = "PIMMenu"
 SG.ResetOnSpawn = false
@@ -41,8 +85,15 @@ SG.IgnoreGuiInset = true
 SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 SG.Parent = game:GetService("CoreGui")
 
+-- ================================================================
+-- ГЛАВНОЕ МЕНЮ (компактное, только кнопки управления)
+-- ================================================================
+local menuCollapsed = false
+local MENU_H_EXPANDED  = 190   -- высота со всеми кнопками
+local MENU_H_COLLAPSED = 40    -- только title bar
+
 local F = Instance.new("Frame", SG)
-F.Size = UDim2.new(0, 300, 1, -80)
+F.Size = UDim2.new(0, 220, 0, MENU_H_EXPANDED)
 F.Position = UDim2.new(0, 8, 0, 60)
 F.BackgroundColor3 = Color3.fromRGB(8, 8, 16)
 F.BorderSizePixel = 0
@@ -52,7 +103,7 @@ local fs = Instance.new("UIStroke", F)
 fs.Color = Color3.fromRGB(70, 50, 140)
 fs.Thickness = 1
 
--- === DRAG ===
+-- drag главного меню
 local drag, ds, dp = false, nil, nil
 F.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch
@@ -70,12 +121,10 @@ F.InputChanged:Connect(function(i)
 end)
 F.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch
-    or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        drag = false
-    end
+    or i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
 end)
 
--- === TITLE BAR ===
+-- ── Title bar главного меню ───────────────────────────────────────
 local TB = Instance.new("Frame", F)
 TB.Size = UDim2.new(1, 0, 0, 36)
 TB.BackgroundColor3 = Color3.fromRGB(22, 16, 48)
@@ -83,15 +132,27 @@ TB.BorderSizePixel = 0
 Instance.new("UICorner", TB).CornerRadius = UDim.new(0, 12)
 
 local TL = Instance.new("TextLabel", TB)
-TL.Size = UDim2.new(1, -44, 1, 0)
+TL.Size = UDim2.new(1, -76, 1, 0)
 TL.Position = UDim2.new(0, 10, 0, 0)
 TL.BackgroundTransparency = 1
 TL.TextColor3 = Color3.fromRGB(190, 160, 255)
-TL.Text = "🔍 Ultra Dump v3"
+TL.Text = "🔍 Ultra Dump v4"
 TL.Font = Enum.Font.GothamBold
 TL.TextSize = 13
 TL.TextXAlignment = Enum.TextXAlignment.Left
 
+-- Кнопка свернуть/развернуть
+local MinBtn = Instance.new("TextButton", TB)
+MinBtn.Size = UDim2.new(0, 28, 0, 28)
+MinBtn.Position = UDim2.new(1, -64, 0, 4)
+MinBtn.BackgroundColor3 = Color3.fromRGB(50, 80, 50)
+MinBtn.Text = "▼"
+MinBtn.TextColor3 = Color3.new(1, 1, 1)
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 11
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
+
+-- Кнопка закрыть
 local XB = Instance.new("TextButton", TB)
 XB.Size = UDim2.new(0, 28, 0, 28)
 XB.Position = UDim2.new(1, -32, 0, 4)
@@ -103,34 +164,75 @@ XB.TextSize = 12
 Instance.new("UICorner", XB).CornerRadius = UDim.new(0, 6)
 XB.MouseButton1Up:Connect(function() SG:Destroy() end)
 
--- === DUMP BUTTON ===
-local DumpBtn = Instance.new("TextButton", F)
-DumpBtn.Size = UDim2.new(1, -12, 0, 36)
-DumpBtn.Position = UDim2.new(0, 6, 0, 42)
-DumpBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 90)
-DumpBtn.Text = "▶  Run Ultra Dump"
-DumpBtn.TextColor3 = Color3.new(1, 1, 1)
-DumpBtn.Font = Enum.Font.GothamBold
-DumpBtn.TextSize = 13
-DumpBtn.BorderSizePixel = 0
-Instance.new("UICorner", DumpBtn).CornerRadius = UDim.new(0, 8)
+-- ── Контейнер кнопок (скрывается при свёртке) ────────────────────
+local BtnBox = Instance.new("Frame", F)
+BtnBox.Size = UDim2.new(1, 0, 1, -40)
+BtnBox.Position = UDim2.new(0, 0, 0, 40)
+BtnBox.BackgroundTransparency = 1
+BtnBox.BorderSizePixel = 0
 
--- === LOG BUTTON ===
-local LogBtn = Instance.new("TextButton", F)
-LogBtn.Size = UDim2.new(1, -12, 0, 32)
-LogBtn.Position = UDim2.new(0, 6, 0, 84)
-LogBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 90)
-LogBtn.Text = "📄  Лог"
-LogBtn.TextColor3 = Color3.new(1, 1, 1)
-LogBtn.Font = Enum.Font.GothamBold
-LogBtn.TextSize = 13
-LogBtn.BorderSizePixel = 0
-Instance.new("UICorner", LogBtn).CornerRadius = UDim.new(0, 8)
+local BtnLayout = Instance.new("UIListLayout", BtnBox)
+BtnLayout.SortOrder = Enum.SortOrder.LayoutOrder
+BtnLayout.Padding = UDim.new(0, 6)
+BtnLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
--- === LOG WINDOW (такое же окно, как меню) ===
+local BtnPad = Instance.new("UIPadding", BtnBox)
+BtnPad.PaddingTop = UDim.new(0, 6)
+BtnPad.PaddingLeft = UDim.new(0, 6)
+BtnPad.PaddingRight = UDim.new(0, 6)
+
+local function makeBtn(parent, text, color, order)
+    local b = Instance.new("TextButton", parent)
+    b.Size = UDim2.new(1, 0, 0, 36)
+    b.BackgroundColor3 = color
+    b.Text = text
+    b.TextColor3 = Color3.new(1,1,1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.BorderSizePixel = 0
+    b.LayoutOrder = order
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    return b
+end
+
+local DumpBtn  = makeBtn(BtnBox, "▶  Run Ultra Dump",   Color3.fromRGB(40, 40, 90),  1)
+local LogBtn   = makeBtn(BtnBox, "📄  Лог",              Color3.fromRGB(40, 70, 90),  2)
+
+-- Переключатель авто-сохранения
+local AutoBtn = makeBtn(BtnBox, "💾  Авто-сохранение: ВЫКЛ", Color3.fromRGB(50, 50, 50), 3)
+AutoBtn.TextSize = 12
+AutoBtn.MouseButton1Up:Connect(function()
+    autoSave = not autoSave
+    if autoSave then
+        _autoFile = nil  -- новый файл при каждом включении
+        AutoBtn.Text = "💾  Авто-сохранение: ВКЛ"
+        AutoBtn.BackgroundColor3 = Color3.fromRGB(30, 90, 50)
+    else
+        AutoBtn.Text = "💾  Авто-сохранение: ВЫКЛ"
+        AutoBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    end
+end)
+
+-- ── Свернуть / развернуть ─────────────────────────────────────────
+MinBtn.MouseButton1Up:Connect(function()
+    menuCollapsed = not menuCollapsed
+    if menuCollapsed then
+        F.Size = UDim2.new(0, 220, 0, MENU_H_COLLAPSED)
+        BtnBox.Visible = false
+        MinBtn.Text = "▲"
+    else
+        F.Size = UDim2.new(0, 220, 0, MENU_H_EXPANDED)
+        BtnBox.Visible = true
+        MinBtn.Text = "▼"
+    end
+end)
+
+-- ================================================================
+-- ОКНО ЛОГА
+-- ================================================================
 local LF = Instance.new("Frame", SG)
-LF.Size = UDim2.new(0, 300, 1, -80)
-LF.Position = UDim2.new(0, 316, 0, 60)
+LF.Size = UDim2.new(0, 310, 1, -80)
+LF.Position = UDim2.new(0, 236, 0, 60)
 LF.BackgroundColor3 = Color3.fromRGB(8, 8, 16)
 LF.BorderSizePixel = 0
 LF.ClipsDescendants = true
@@ -140,7 +242,7 @@ local lfs = Instance.new("UIStroke", LF)
 lfs.Color = Color3.fromRGB(70, 50, 140)
 lfs.Thickness = 1
 
--- drag для окна лога
+-- drag окна лога
 local ldrag, lds, ldp = false, nil, nil
 LF.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch
@@ -158,9 +260,7 @@ LF.InputChanged:Connect(function(i)
 end)
 LF.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch
-    or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        ldrag = false
-    end
+    or i.UserInputType == Enum.UserInputType.MouseButton1 then ldrag = false end
 end)
 
 -- title bar окна лога
@@ -191,34 +291,89 @@ LXB.TextSize = 12
 Instance.new("UICorner", LXB).CornerRadius = UDim.new(0, 6)
 LXB.MouseButton1Up:Connect(function() LF.Visible = false end)
 
-LogBtn.MouseButton1Up:Connect(function()
-    LF.Visible = not LF.Visible
-end)
+LogBtn.MouseButton1Up:Connect(function() LF.Visible = not LF.Visible end)
 
--- === CLEAR BUTTON (в окне лога) ===
-local ClrBtn = Instance.new("TextButton", LF)
-ClrBtn.Size = UDim2.new(1, -12, 0, 30)
-ClrBtn.Position = UDim2.new(0, 6, 0, 42)
-ClrBtn.BackgroundColor3 = Color3.fromRGB(60, 20, 20)
-ClrBtn.Text = "🗑  Очистить лог"
-ClrBtn.TextColor3 = Color3.new(1, 1, 1)
-ClrBtn.Font = Enum.Font.GothamSemibold
-ClrBtn.TextSize = 12
-ClrBtn.BorderSizePixel = 0
-Instance.new("UICorner", ClrBtn).CornerRadius = UDim.new(0, 8)
+-- Строка кнопок лога: [Очистить] [Скопировать] [Сохранить файл]
+local LBtnRow = Instance.new("Frame", LF)
+LBtnRow.Size = UDim2.new(1, -12, 0, 32)
+LBtnRow.Position = UDim2.new(0, 6, 0, 42)
+LBtnRow.BackgroundTransparency = 1
+LBtnRow.BorderSizePixel = 0
+local LBtnLayout = Instance.new("UIListLayout", LBtnRow)
+LBtnLayout.FillDirection = Enum.FillDirection.Horizontal
+LBtnLayout.SortOrder = Enum.SortOrder.LayoutOrder
+LBtnLayout.Padding = UDim.new(0, 4)
+
+local function makeLogBtn(parent, text, color, order)
+    local b = Instance.new("TextButton", parent)
+    b.Size = UDim2.new(0.33, -3, 1, 0)
+    b.BackgroundColor3 = color
+    b.Text = text
+    b.TextColor3 = Color3.new(1,1,1)
+    b.Font = Enum.Font.GothamSemibold
+    b.TextSize = 11
+    b.BorderSizePixel = 0
+    b.LayoutOrder = order
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
+end
+
+local ClrBtn  = makeLogBtn(LBtnRow, "🗑 Очистить",   Color3.fromRGB(90, 20, 20),   1)
+local CopyBtn = makeLogBtn(LBtnRow, "📋 Копировать", Color3.fromRGB(36, 90, 60),   2)
+local SaveBtn = makeLogBtn(LBtnRow, "💾 Сохранить",  Color3.fromRGB(50, 60, 110),  3)
+
 ClrBtn.MouseButton1Up:Connect(function() lc() end)
 
--- === LOG SCROLL (в окне лога) ===
+CopyBtn.MouseButton1Up:Connect(function()
+    local s = table.concat(logBuf, "\n")
+    if s == "" then
+        CopyBtn.Text = "⚠ Пусто"
+    elseif setclipboard then
+        setclipboard(s)
+        CopyBtn.Text = "✓ Скопировано"
+    else
+        CopyBtn.Text = "⚠ Нет API"
+    end
+    task.delay(2, function() CopyBtn.Text = "📋 Копировать" end)
+end)
+
+SaveBtn.MouseButton1Up:Connect(function()
+    if #logBuf == 0 then
+        SaveBtn.Text = "⚠ Лог пуст"
+        task.delay(2, function() SaveBtn.Text = "💾 Сохранить" end)
+        return
+    end
+    local ts = os.date and os.date("%Y%m%d_%H%M%S") or tostring(tick()):gsub("%.", "_")
+    local path = DUMP_DIR .. "dump_" .. ts .. ".txt"
+    local ok, err = saveFullLog(path)
+    if ok then
+        SaveBtn.Text = "✓ Сохранено!"
+        SaveBtn.BackgroundColor3 = Color3.fromRGB(30, 100, 50)
+    else
+        SaveBtn.Text = "✗ Ошибка"
+        print("[DumpSave] err: " .. tostring(err))
+    end
+    task.delay(3, function()
+        SaveBtn.Text = "💾 Сохранить"
+        SaveBtn.BackgroundColor3 = Color3.fromRGB(50, 60, 110)
+    end)
+end)
+
+-- === LOG SCROLL ===
+-- TouchScrollEnabled для телефонов
 local LogScr = Instance.new("ScrollingFrame", LF)
-LogScr.Size = UDim2.new(1, -8, 1, -164)
-LogScr.Position = UDim2.new(0, 4, 0, 78)
+LogScr.Size = UDim2.new(1, -8, 1, -88)
+LogScr.Position = UDim2.new(0, 4, 0, 82)
 LogScr.BackgroundColor3 = Color3.fromRGB(6, 6, 12)
 LogScr.BorderSizePixel = 0
-LogScr.ScrollBarThickness = 3
-LogScr.ScrollBarImageColor3 = Color3.fromRGB(80, 60, 160)
+LogScr.ScrollBarThickness = 6          -- толще для пальца
+LogScr.ScrollBarImageColor3 = Color3.fromRGB(100, 80, 200)
 LogScr.CanvasSize = UDim2.new(0, 0, 0, 0)
 LogScr.AutomaticCanvasSize = Enum.AutomaticSize.Y
+LogScr.ScrollingDirection = Enum.ScrollingDirection.Y
+LogScr.ElasticBehavior = Enum.ElasticBehavior.Always  -- iOS-подобная прокрутка
 Instance.new("UICorner", LogScr).CornerRadius = UDim.new(0, 8)
+
 local LPad = Instance.new("UIPadding", LogScr)
 LPad.PaddingLeft = UDim.new(0, 6)
 LPad.PaddingRight = UDim.new(0, 6)
@@ -237,30 +392,6 @@ LogText.TextYAlignment = Enum.TextYAlignment.Top
 LogText.TextWrapped = true
 LogText.Text = "(пусто — нажми Run Ultra Dump)"
 
--- === COPY BUTTON (в окне лога) ===
-local CopyBtn = Instance.new("TextButton", LF)
-CopyBtn.Size = UDim2.new(1, -12, 0, 36)
-CopyBtn.Position = UDim2.new(0, 6, 1, -42)
-CopyBtn.BackgroundColor3 = Color3.fromRGB(36, 100, 60)
-CopyBtn.Text = "📋  Скопировать лог"
-CopyBtn.TextColor3 = Color3.new(1, 1, 1)
-CopyBtn.Font = Enum.Font.GothamBold
-CopyBtn.TextSize = 13
-CopyBtn.BorderSizePixel = 0
-Instance.new("UICorner", CopyBtn).CornerRadius = UDim.new(0, 8)
-CopyBtn.MouseButton1Up:Connect(function()
-    local s = table.concat(logBuf, "\n")
-    if s == "" then
-        CopyBtn.Text = "⚠  Лог пустой"
-    elseif setclipboard then
-        setclipboard(s)
-        CopyBtn.Text = "✓  Скопировано!"
-    else
-        CopyBtn.Text = "⚠  Нет setclipboard"
-    end
-    task.delay(2, function() CopyBtn.Text = "📋  Скопировать лог" end)
-end)
-
 -- ================================================================
 -- HELPERS
 -- ================================================================
@@ -276,12 +407,27 @@ local function header(title)
 end
 
 -- ================================================================
+-- ASYNC HELPER: запускает fn параллельно, возвращает join-функцию
+-- ================================================================
+local function asyncSection(fn)
+    local done = false
+    task.spawn(function()
+        pcall(fn)
+        done = true
+    end)
+    return function()
+        while not done do task.wait() end
+    end
+end
+
+-- ================================================================
 -- ULTRA DUMP
 -- ================================================================
 local function doFullDump()
     DumpBtn.Text = "⏳ Дамп идёт..."
     DumpBtn.BackgroundColor3 = Color3.fromRGB(80, 60, 20)
     lc()
+    local _dumpStart = tick()
 
     -- ── 1. GAME INFO ──────────────────────────────────────────────
     header("GAME INFO")
@@ -507,8 +653,10 @@ local function doFullDump()
     end)
 
     -- ══════════════════════════════════════════════════════════════
-    -- ── 14. FOLDERS / INVENTORY DUMP (NEW) ───────────────────────
+    -- ── 14–16 запускаем ПАРАЛЛЕЛЬНО (тяжёлые секции) ─────────────
     -- ══════════════════════════════════════════════════════════════
+
+    local join14 = asyncSection(function()
     header("FOLDERS / INVENTORY (LP+RS)")
     pcall(function()
         -- Ключевые слова для инвентарей в Pop It Trading
@@ -565,7 +713,9 @@ local function doFullDump()
             dumpObj(pd, 2)
         end
     end)
+    end) -- end asyncSection 14
 
+    local join15 = asyncSection(function()
     -- ══════════════════════════════════════════════════════════════
     -- ── 15. SCRIPT SOURCE DUMP / DECOMPILE ATTEMPT (NEW) ─────────
     -- ══════════════════════════════════════════════════════════════
@@ -622,7 +772,9 @@ local function doFullDump()
             end
         end
     end)
+    end) -- end asyncSection 15
 
+    local join16 = asyncSection(function()
     -- ══════════════════════════════════════════════════════════════
     -- ── 16. DATASTORE KEY SCAN (NEW) ─────────────────────────────
     -- ══════════════════════════════════════════════════════════════
@@ -719,19 +871,34 @@ local function doFullDump()
             lp("  DataStoreService: нет доступа (клиент)")
         end
     end)
+    end) -- end asyncSection 16
+
+    -- Ждём завершения параллельных секций 14-16 перед 17
+    join14(); join15(); join16()
 
     -- ══════════════════════════════════════════════════════════════
-    -- ── 17. REMOTES FIREALL SPAM (NEW) ───────────────────────────
+    -- ── 17. REMOTES FIREALL SPAM (NEW) — параллельно ─────────────
     -- ══════════════════════════════════════════════════════════════
     header("REMOTES FIREALL SPAM")
     pcall(function()
-        lp("  Пробуем FireServer на каждом RE...")
-        local fired, failed = 0, 0
+        -- Собираем списки заранее (не итерируем дважды)
+        local reList, rfList = {}, {}
         for _, obj in ipairs(RS:GetDescendants()) do
-            if obj.ClassName == "RemoteEvent" then
-                local ok, err = pcall(function()
-                    obj:FireServer()
-                end)
+            local c = obj.ClassName
+            if c == "RemoteEvent" then
+                table.insert(reList, obj)
+            elseif c == "RemoteFunction" then
+                table.insert(rfList, obj)
+            end
+        end
+
+        -- FireServer — все параллельно, без wait
+        lp("  Пробуем FireServer на " .. #reList .. " RE (параллельно)...")
+        local fired, failed = 0, 0
+        local reDone = 0
+        for _, obj in ipairs(reList) do
+            task.spawn(function()
+                local ok, err = pcall(function() obj:FireServer() end)
                 if ok then
                     fired += 1
                     lp("  [OK] " .. obj:GetFullName())
@@ -739,34 +906,36 @@ local function doFullDump()
                     failed += 1
                     lp("  [ERR] " .. obj:GetFullName() .. " => " .. tostring(err))
                 end
-                task.wait(0.05) -- небольшая задержка чтобы не банить
-            end
+                reDone += 1
+            end)
         end
-        lp("  Итого: OK=" .. fired .. " ERR=" .. failed)
+        -- Ждём завершения всех spawn (не блокируем надолго)
+        local reTimeout = tick() + 5
+        while reDone < #reList and tick() < reTimeout do task.wait() end
+        lp("  Итого RE: OK=" .. fired .. " ERR=" .. failed)
 
-        -- RemoteFunctions — InvokeServer
-        lp("\n  Пробуем InvokeServer на каждом RF...")
+        -- InvokeServer — параллельно
+        lp("\n  Пробуем InvokeServer на " .. #rfList .. " RF (параллельно)...")
         local invoked, invFailed = 0, 0
-        for _, obj in ipairs(RS:GetDescendants()) do
-            if obj.ClassName == "RemoteFunction" then
-                local ok, result = pcall(function()
-                    return obj:InvokeServer()
-                end)
+        local rfDone = 0
+        for _, obj in ipairs(rfList) do
+            task.spawn(function()
+                local ok, result = pcall(function() return obj:InvokeServer() end)
                 if ok then
                     invoked += 1
                     local res = ""
-                    pcall(function()
-                        res = HttpService:JSONEncode(result)
-                    end)
+                    pcall(function() res = HttpService:JSONEncode(result) end)
                     if res == "" then res = tostring(result) end
                     lp("  [OK] " .. obj:GetFullName() .. " => " .. res:sub(1, 120))
                 else
                     invFailed += 1
                     lp("  [ERR] " .. obj:GetFullName() .. " => " .. tostring(result))
                 end
-                task.wait(0.05)
-            end
+                rfDone += 1
+            end)
         end
+        local rfTimeout = tick() + 8  -- InvokeServer медленнее
+        while rfDone < #rfList and tick() < rfTimeout do task.wait() end
         lp("  Итого RF: OK=" .. invoked .. " ERR=" .. invFailed)
     end)
 
@@ -808,9 +977,20 @@ local function doFullDump()
     lp("║          END DUMP            ║")
     lp("╚══════════════════════════════╝")
     lp("  Строк в логе: " .. #logBuf)
+    local elapsed = math.floor((tick() - _dumpStart) * 10 + 0.5) / 10
+    lp("  Время дампа : " .. elapsed .. " сек")
 
-    DumpBtn.Text = "▶  Run Ultra Dump"
-    DumpBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 90)
+    -- Если авто-сохранение включено — сообщаем путь
+    if autoSave and _autoFile then
+        lp("  Авто-файл   : " .. _autoFile)
+    end
+
+    DumpBtn.Text = "✓ Готово за " .. elapsed .. "с"
+    DumpBtn.BackgroundColor3 = Color3.fromRGB(30, 80, 40)
+    task.delay(4, function()
+        DumpBtn.Text = "▶  Run Ultra Dump"
+        DumpBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 90)
+    end)
 end
 
 DumpBtn.MouseButton1Up:Connect(doFullDump)
