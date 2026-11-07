@@ -66,8 +66,62 @@ local CFG = {
     StatPower        = 99999,
 
     -- Прочее
-    HideAllTrainGUI  = true,    -- скрывать Training*+Throw* ScreenGui
+    HideAllTrainGUI  = false,    -- скрывать Training*+Throw* ScreenGui
 }
+
+-- ╔══════════════════════════════════════════════════╗
+-- ║  CONFIG SAVE / LOAD (txt-файл)                   ║
+-- ║  Первый запуск: всё выключено, значения по       ║
+-- ║  умолчанию. Дальше всё сохраняется в файл и      ║
+-- ║  подгружается при следующих запусках.            ║
+-- ╚══════════════════════════════════════════════════╝
+local CONFIG_FILE = "siska_config.txt"
+local pendingRestore = {}   -- {функция запуска, ...} для включённых тумблеров
+
+local function loadConfig()
+    if not (isfile and readfile) then return end
+    local ok, text = pcall(function()
+        if isfile(CONFIG_FILE) then return readfile(CONFIG_FILE) end
+    end)
+    if not ok or type(text) ~= "string" then return end
+    for line in text:gmatch("[^\r\n]+") do
+        local k, v = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+        if k and CFG[k] ~= nil then
+            if type(CFG[k]) == "boolean" then
+                if v == "true" then CFG[k] = true
+                elseif v == "false" then CFG[k] = false end
+            elseif type(CFG[k]) == "number" then
+                local n = tonumber(v)
+                if n then CFG[k] = n end
+            end
+        end
+    end
+end
+
+local function writeConfig()
+    if not writefile then return end
+    local keys = {}
+    for k, v in pairs(CFG) do
+        if type(v) == "boolean" or type(v) == "number" then keys[#keys+1] = k end
+    end
+    table.sort(keys)
+    local out = {}
+    for _, k in ipairs(keys) do
+        local v = CFG[k]
+        out[#out+1] = k .. "=" .. (type(v) == "number" and string.format("%.17g", v) or tostring(v))
+    end
+    pcall(writefile, CONFIG_FILE, table.concat(out, "\n"))
+end
+
+local saveQueued = false
+local function saveConfig()   -- с задержкой, чтобы ползунок не писал файл на каждый пиксель
+    if saveQueued then return end
+    saveQueued = true
+    task.delay(0.5, function()
+        saveQueued = false
+        writeConfig()
+    end)
+end
 
 -- ╔══════════════════╗
 -- ║  HELPERS         ║
@@ -167,7 +221,7 @@ local function hookReplicaSet()
         for _, conn in ipairs(conns) do
             if conn.Function then
                 local orig = conn.Function
-                hookfunction(orig, function(repId, path, value, ...)
+                hookfunction(orig, (newcclosure or function(f) return f end)(function(repId, path, value, ...)
                     if CFG.AutoInjectStats and type(path) == "table" then
                         local f = path[1]
                         if f == "Money"      then value = CFG.StatMoneyRaw end
@@ -175,7 +229,7 @@ local function hookReplicaSet()
                         if f == "ThrowPower" or f == "Throw Power" then value = CFG.StatPower end
                     end
                     return orig(repId, path, value, ...)
-                end)
+                end))
             end
         end
         replicaHooked = true
@@ -193,15 +247,19 @@ local function hookNewindex()
         local mt = getrawmetatable(game)
         local oldNI = mt.__newindex
         setreadonly(mt, false)
-        mt.__newindex = function(self, key, value)
-            if CFG.AutoInjectStats and typeof(self) == "Instance" and key == "Value" then
+        mt.__newindex = (newcclosure or function(f) return f end)(function(self, key, value)
+            -- быстрый выход: почти все записи в игре идут здесь и не должны тормозить
+            if key ~= "Value" or not CFG.AutoInjectStats then
+                return oldNI(self, key, value)
+            end
+            if typeof(self) == "Instance" then
                 local n = self.Name
                 if n == "Money"       and self:IsA("StringValue") then value = formatMoney(CFG.StatMoneyRaw) end
                 if n == "Throw Power" and self:IsA("IntValue")    then value = CFG.StatPower end
                 if n == "Money/s"     and self:IsA("StringValue") then value = formatMoney(CFG.StatMPSRaw).."/s" end
             end
             return oldNI(self, key, value)
-        end
+        end)
         setreadonly(mt, true)
     end)
 end
@@ -213,44 +271,33 @@ end
 -- ║  умножаем силу в этих данных × ThrowMultiplier   ║
 -- ╚══════════════════════════════════════════════════╝
 local throwHooked = false
+local inThrowHook = false   -- защита от рекурсии (внутри хука мы сами зовём rf)
 local function hookThrowPower()
     if throwHooked then return end
-    throwHooked = true
     pcall(function()
-        -- Патчим Throw Power атрибут игрока локально
-        -- Игра читает lp:GetAttribute("ThrowPower") или leaderstats
-        -- При броске сервер берёт значение из реплики
-        -- Пробуем напрямую через RF Player_SetThrowPower
-        -- и через атрибут персонажа если есть
-
-        -- Дополнительно: хукаем Throw_Start чтобы подменить
-        -- значение до отправки на сервер
-        if not hookfunction or not getconnections then return end
-
+        if not hookfunction then return end
         local throwRF = Remotes:FindFirstChild("Throw_Start")
         if not throwRF then return end
 
-        -- Хукаем InvokeServer чтобы перед броском поднять мощь
-        local origInvoke = throwRF.InvokeServer
-        hookfunction(origInvoke, function(self, ...)
-            if CFG.ThrowMultiEnable and CFG.ThrowMultiplier > 1 then
-                -- Временно выставляем огромный ThrowPower через RF
-                local mult = CFG.ThrowMultiplier
+        local origInvoke
+        origInvoke = hookfunction(throwRF.InvokeServer, (newcclosure or function(f) return f end)(function(self, ...)
+            -- трогаем только Throw_Start, остальные RF проходят без изменений
+            if self == throwRF and not inThrowHook
+            and CFG.ThrowMultiEnable and CFG.ThrowMultiplier > 1 then
+                inThrowHook = true
                 local stats = lp:FindFirstChild("leaderstats")
                 local basePow = 1000
                 if stats then
                     local p = stats:FindFirstChild("Throw Power")
-                    if p then basePow = p.Value end
+                    if p then basePow = tonumber(p.Value) or 1000 end
                 end
-                pcall(rf, "Player_SetThrowPower", basePow * mult)
-                task.defer(function()
-                    -- Возвращаем обратно через tick чтобы сервер успел бросок обработать
-                    task.wait(2)
-                    -- (опционально: восстанавливаем если нужно)
-                end)
+                pcall(rf, "Player_SetThrowPower",
+                    math.min(basePow * CFG.ThrowMultiplier, 2147483647))
+                inThrowHook = false
             end
             return origInvoke(self, ...)
-        end)
+        end))
+        throwHooked = true
     end)
 end
 
@@ -455,6 +502,7 @@ end
 -- ── STAT INJECT ──────────────────────────────────
 local function startInject()
     killThread("inject")
+    pcall(hookReplicaSet)   -- хук ставится только когда реально нужен
     threads["inject"] = task.spawn(function()
         while CFG.AutoInjectStats do
             local stats = lp:FindFirstChild("leaderstats")
@@ -541,7 +589,7 @@ local function buildGui()
         W_FULL = math.min(W_FULL, cam.ViewportSize.X - 20)
         H_FULL = math.min(H_FULL, cam.ViewportSize.Y - 20)
     end
-    main.Size=UDim2.new(0,W_FULL,0,H_FULL); main.Position=UDim2.new(0,10,0.5,-H_FULL/2)
+    main.Size=UDim2.new(0,W_FULL,0,H_FULL); main.Position=UDim2.new(0.5,-W_FULL/2,0.5,-H_FULL/2)
     main.BackgroundColor3=C.bg; main.BorderSizePixel=0
     main.Active=true; main.ClipsDescendants=true
     mkCorner(main,12); mkStroke(main,C.accent,1.5)
@@ -658,7 +706,12 @@ local function buildGui()
             btn.BackgroundColor3=CFG[cfgKey] and C.on or C.off
             btn.Text=CFG[cfgKey] and "ON" or "OFF"
             if onToggle then onToggle(CFG[cfgKey]) end
+            saveConfig()
         end)
+        -- если тумблер был включён в сохранённом конфиге — запустим после старта
+        if onToggle and CFG[cfgKey] then
+            pendingRestore[#pendingRestore+1] = function() onToggle(true) end
+        end
         return btn
     end
 
@@ -684,6 +737,7 @@ local function buildGui()
             if isNum then local n=tonumber(val); if n then CFG[cfgKey]=n end
             else CFG[cfgKey]=val end
             box.Text=tostring(CFG[cfgKey])
+            saveConfig()
             setBtn.BackgroundColor3=C.on
             task.delay(0.4,function() setBtn.BackgroundColor3=C.accent end)
         end
@@ -728,6 +782,7 @@ local function buildGui()
         local function updateSlider(val)
             val = math.max(1, val)
             CFG.ThrowMultiplier = val
+            saveConfig()
             box.Text = tostring(val)
             local t = math.min(1, math.log10(math.max(1,val)) / maxLog)
             fill.Size = UDim2.new(t, 0, 1, 0)
@@ -777,7 +832,7 @@ local function buildGui()
             end)
         end
 
-        updateSlider(1)
+        updateSlider(CFG.ThrowMultiplier or 1)
     end
 
     local function addActionBtn(parent,label,color,onClick)
@@ -852,7 +907,7 @@ local function buildGui()
             b.BackgroundColor3=C.dim; b.Text=lbl2; b.TextColor3=C.text; b.TextSize=9
             b.Font=FB; b.BorderSizePixel=0; mkCorner(b,4)
             b.MouseButton1Click:Connect(function()
-                CFG[cfgKey]=val; preview.Text=formatMoney(val)
+                CFG[cfgKey]=val; preview.Text=formatMoney(val); saveConfig()
                 b.BackgroundColor3=C.on; task.delay(0.3,function() b.BackgroundColor3=C.dim end)
             end)
         end
@@ -1004,13 +1059,31 @@ end)
 -- ╔══════════════════════════════════════╗
 -- ║  INIT                                ║
 -- ╚══════════════════════════════════════╝
-task.wait(2)
-setupGuiWatcher()       -- авто-скрытие TrainingSequence / ThrowSequence
-setupReturnBlock()      -- блокируем return TP при броске
-setupTrainingBonusHook()-- авто-клик x2 бонуса тренировки
-hookReplicaSet()        -- патч ReplicaSet для stat inject
-hookNewindex()          -- патч __newindex как fallback
-hookThrowPower()        -- хук multiplier силы броска
+-- Меню появляется сразу. Все хуки ставятся в фоне, по одному, с паузами —
+-- игра не подвисает, а хуки работают как раньше.
+loadConfig()   -- подгружаем сохранённые настройки (если файла нет — всё по умолчанию)
 buildGui()
+task.spawn(function()
+    task.wait(1)
+    local steps = {
+        setupGuiWatcher,    -- авто-скрытие TrainingSequence / ThrowSequence
+        setupReturnBlock,   -- блокируем return TP при броске
+        hookReplicaSet,     -- патч ReplicaSet для stat inject
+        hookThrowPower,     -- хук InvokeServer (только Throw_Start)
+        hookNewindex,       -- патч __newindex (быстрый путь)
+    }
+    for _, fn in ipairs(steps) do
+        pcall(fn)
+        task.wait(0.4)      -- пауза между хуками, чтобы не было фриза
+    end
+    task.spawn(setupTrainingBonusHook)  -- WaitForChild внутри, не блокирует
+    -- запускаем то, что было включено в сохранённом конфиге (после установки хуков)
+    for _, start in ipairs(pendingRestore) do
+        pcall(start)
+        task.wait(0.1)
+    end
+    print("[Z] Hooks: ReplicaSet=" .. (replicaHooked and "✓" or "✗")
+        .. "  __newindex=" .. (niHooked and "✓" or "✗")
+        .. "  throwHook=" .. (throwHooked and "✓" or "✗"))
+end)
 print("[Z] v7.0 Ghost loaded ✓  |  RCtrl = show/hide")
-print("[Z] Hooks: ReplicaSet=" .. (replicaHooked and "✓" or "✗") .. "  __newindex=" .. (niHooked and "✓" or "✗") .. "  throwHook=" .. (throwHooked and "✓" or "✗"))
