@@ -13,53 +13,73 @@ end)
 -- === LOG STATE ===
 local logBuf = {}
 local LogText
-local autoSave = false          -- переключатель авто-сохранения
-local DUMP_DIR = "/storage/emulated/0/Delta/Dump/"
+local autoSave = true               -- после дампа автоматически создавать .txt
+local UI_MAX_CHARS = 15000          -- лимит текста в TextLabel (Roblox режет длинные строки)
 
--- ── Запись строки в файл (Delta / writefile) ──────────────────────
-local _autoFile = nil  -- текущий путь файла для авто-записи
-local function getAutoFilePath()
-    if _autoFile then return _autoFile end
-    -- Создаём имя по timestamp
-    local ts = os.date and os.date("%Y%m%d_%H%M%S") or tostring(tick()):gsub("%.", "_")
-    _autoFile = DUMP_DIR .. "dump_" .. ts .. ".txt"
-    return _autoFile
+-- Папки по очереди: пробуем первую рабочую (Delta Android → workspace executor-а → корень)
+local DUMP_DIR_CANDIDATES = {
+    "/storage/emulated/0/Delta/Dump/",
+    "Dump/",
+    "",
+}
+local DUMP_DIR = DUMP_DIR_CANDIDATES[1]
+local _dirResolved = false
+
+local function tsNow()
+    if os.date then return os.date("%Y%m%d_%H%M%S") end
+    return tostring(math.floor(tick()))
 end
 
-local function writeLineToFile(line)
-    if not (writefile and isfolder and makefolder) then return end
-    pcall(function()
-        if not isfolder(DUMP_DIR) then makefolder(DUMP_DIR) end
-        local path = getAutoFilePath()
-        local ok, existing = pcall(readfile, path)
-        local content = (ok and existing or "") .. line .. "\n"
-        writefile(path, content)
-    end)
+-- Выбираем папку, в которую реально можно писать
+local function resolveDir()
+    if _dirResolved then return DUMP_DIR end
+    _dirResolved = true
+    if not writefile then return DUMP_DIR end
+    for _, c in ipairs(DUMP_DIR_CANDIDATES) do
+        local ok = pcall(function()
+            if c ~= "" and isfolder and makefolder and not isfolder(c) then makefolder(c) end
+            writefile(c .. "_test.txt", "ok")
+            if delfile then pcall(delfile, c .. "_test.txt") end
+        end)
+        if ok then DUMP_DIR = c; break end
+    end
+    return DUMP_DIR
+end
+
+-- Хвост лога для UI (полный текст всегда уходит в .txt)
+local function tailText(buf, maxChars)
+    local n = #buf
+    if n == 0 then return "" end
+    local size, first = 0, n
+    for i = n, 1, -1 do
+        size = size + #buf[i] + 1
+        if size > maxChars and i < n then break end
+        first = i
+    end
+    local s = table.concat(buf, "\n", first, n)
+    if first > 1 then s = "… (показан хвост, полный лог — в .txt)\n" .. s end
+    if #s > maxChars + 100 then s = s:sub(-maxChars) end
+    return s
 end
 
 local function saveFullLog(path)
     if not writefile then return false, "writefile недоступен" end
-    local ok, err = pcall(function()
-        if isfolder and makefolder then
-            if not isfolder(DUMP_DIR) then makefolder(DUMP_DIR) end
-        end
+    return pcall(function()
+        resolveDir()
         writefile(path, table.concat(logBuf, "\n"))
     end)
-    return ok, err
 end
 
 -- ── Батчинг обновлений UI ─────────────────────────────────────────
 local _logDirty = false
 local function lp(s)
     table.insert(logBuf, s)
-    print(s)
-    if autoSave then writeLineToFile(s) end
     if LogText and not _logDirty then
         _logDirty = true
         task.defer(function()
             _logDirty = false
             if LogText then
-                LogText.Text = table.concat(logBuf, "\n")
+                LogText.Text = tailText(logBuf, UI_MAX_CHARS)
                 local scr = LogText.Parent
                 if scr and scr:IsA("ScrollingFrame") then
                     scr.CanvasPosition = Vector2.new(0, 1e9)
@@ -71,7 +91,6 @@ end
 
 local function lc()
     logBuf = {}
-    _autoFile = nil   -- сбрасываем путь авто-файла при очистке
     if LogText then LogText.Text = "(пусто)" end
 end
 
@@ -201,17 +220,16 @@ local RTBtn    = makeBtn(BtnBox, "⚡  Реал-тайм: ВЫКЛ",      Color3
 RTBtn.TextSize = 12
 local RTLogBtn = makeBtn(BtnBox, "📡  RT Лог",               Color3.fromRGB(30, 60, 80),  4)
 
--- Переключатель авто-сохранения
-local AutoBtn = makeBtn(BtnBox, "💾  Авто-сохранение: ВЫКЛ", Color3.fromRGB(50, 50, 50), 5)
+-- Переключатель: создавать .txt после дампа
+local AutoBtn = makeBtn(BtnBox, "💾  Файл .txt: ВКЛ", Color3.fromRGB(30, 90, 50), 5)
 AutoBtn.TextSize = 12
 AutoBtn.MouseButton1Up:Connect(function()
     autoSave = not autoSave
     if autoSave then
-        _autoFile = nil  -- новый файл при каждом включении
-        AutoBtn.Text = "💾  Авто-сохранение: ВКЛ"
+        AutoBtn.Text = "💾  Файл .txt: ВКЛ"
         AutoBtn.BackgroundColor3 = Color3.fromRGB(30, 90, 50)
     else
-        AutoBtn.Text = "💾  Авто-сохранение: ВЫКЛ"
+        AutoBtn.Text = "💾  Файл .txt: ВЫКЛ"
         AutoBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
     end
 end)
@@ -346,8 +364,7 @@ SaveBtn.MouseButton1Up:Connect(function()
         task.delay(2, function() SaveBtn.Text = "💾 Сохранить" end)
         return
     end
-    local ts = os.date and os.date("%Y%m%d_%H%M%S") or tostring(tick()):gsub("%.", "_")
-    local path = DUMP_DIR .. "dump_" .. ts .. ".txt"
+    local path = resolveDir() .. "dump_" .. tsNow() .. ".txt"
     local ok, err = saveFullLog(path)
     if ok then
         SaveBtn.Text = "✓ Сохранено!"
@@ -399,26 +416,43 @@ LogText.Text = "(пусто — нажми Run Ultra Dump)"
 -- РЕАЛ-ТАЙМ СОСТОЯНИЕ
 -- ================================================================
 local rtActive   = false
-local rtThread   = nil      -- coroutine/task handle
-local rtBuf      = {}       -- отдельный лог RT
+local rtThread   = nil      -- task handle
+local rtBuf      = {}       -- RT лог для окна (хвост)
 local rtLogText  = nil      -- TextLabel в окне RT
-local rtFile     = nil      -- путь к RT-файлу
+local rtFile     = nil      -- путь к RT .txt файлу
 local rtDirty    = false
+local rtPending  = {}       -- строки, ещё не сброшенные в файл
+
+-- Сброс накопленных строк в файл (раз в пару секунд, а не на каждую строку)
+local function rtFlush()
+    if not (writefile and rtFile) or #rtPending == 0 then return end
+    local chunk = table.concat(rtPending, "\n") .. "\n"
+    rtPending = {}
+    pcall(function()
+        if appendfile then
+            appendfile(rtFile, chunk)
+        else
+            local ok, ex = pcall(readfile, rtFile)
+            writefile(rtFile, (ok and ex or "") .. chunk)
+        end
+    end)
+end
 
 local function rtLog(s)
-    table.insert(rtBuf, s)
-    if writefile and rtFile then
-        pcall(function()
-            local ok, ex = pcall(readfile, rtFile)
-            writefile(rtFile, (ok and ex or "") .. s .. "\n")
-        end)
+    local line = (os.date and os.date("%H:%M:%S") or "--:--:--") .. "  " .. s
+    table.insert(rtBuf, line)
+    if #rtBuf > 3500 then
+        local keep = {}
+        for i = #rtBuf - 2999, #rtBuf do keep[#keep + 1] = rtBuf[i] end
+        rtBuf = keep
     end
+    if rtFile then table.insert(rtPending, line) end
     if rtLogText and not rtDirty then
         rtDirty = true
         task.defer(function()
             rtDirty = false
             if rtLogText then
-                rtLogText.Text = table.concat(rtBuf, "\n")
+                rtLogText.Text = tailText(rtBuf, UI_MAX_CHARS)
                 local scr = rtLogText.Parent
                 if scr and scr:IsA("ScrollingFrame") then
                     scr.CanvasPosition = Vector2.new(0, 1e9)
@@ -505,7 +539,7 @@ RTBtnLay.Padding = UDim.new(0, 4)
 
 local function makeRT2Btn(parent, text, color, order)
     local b = Instance.new("TextButton", parent)
-    b.Size = UDim2.new(0.5, -2, 1, 0)
+    b.Size = UDim2.new(1/3, -3, 1, 0)
     b.BackgroundColor3 = color
     b.Text = text
     b.TextColor3 = Color3.new(1,1,1)
@@ -517,8 +551,9 @@ local function makeRT2Btn(parent, text, color, order)
     return b
 end
 
-local RTClrBtn  = makeRT2Btn(RTBtnRow, "🗑 Очистить RT",    Color3.fromRGB(90, 20, 20),  1)
-local RTCopyBtn = makeRT2Btn(RTBtnRow, "📋 Копировать RT",  Color3.fromRGB(36, 90, 60),  2)
+local RTClrBtn  = makeRT2Btn(RTBtnRow, "🗑 Очистить",  Color3.fromRGB(90, 20, 20),  1)
+local RTCopyBtn = makeRT2Btn(RTBtnRow, "📋 Копир.",    Color3.fromRGB(36, 90, 60),  2)
+local RTSaveBtn = makeRT2Btn(RTBtnRow, "💾 В файл",    Color3.fromRGB(50, 60, 110), 3)
 
 RTClrBtn.MouseButton1Up:Connect(function()
     rtBuf = {}
@@ -529,7 +564,21 @@ RTCopyBtn.MouseButton1Up:Connect(function()
     if s == "" then RTCopyBtn.Text = "⚠ Пусто"
     elseif setclipboard then setclipboard(s); RTCopyBtn.Text = "✓ OK"
     else RTCopyBtn.Text = "⚠ Нет API" end
-    task.delay(2, function() RTCopyBtn.Text = "📋 Копировать RT" end)
+    task.delay(2, function() RTCopyBtn.Text = "📋 Копир." end)
+end)
+-- Ручной снимок текущего RT-лога в отдельный .txt
+-- (живая запись в realtime_*.txt идёт сама, пока реал-тайм включён)
+RTSaveBtn.MouseButton1Up:Connect(function()
+    if not writefile then
+        RTSaveBtn.Text = "⚠ Нет API"
+    elseif #rtBuf == 0 then
+        RTSaveBtn.Text = "⚠ Пусто"
+    else
+        local path = resolveDir() .. "realtime_snapshot_" .. tsNow() .. ".txt"
+        local ok = pcall(writefile, path, table.concat(rtBuf, "\n"))
+        RTSaveBtn.Text = ok and "✓ Сохранено" or "✗ Ошибка"
+    end
+    task.delay(2, function() RTSaveBtn.Text = "💾 В файл" end)
 end)
 
 -- RT scroll
@@ -1152,11 +1201,17 @@ local function doFullDump()
     local elapsed = math.floor((tick() - _dumpStart) * 10 + 0.5) / 10
     lp("  Время дампа : " .. elapsed .. " сек")
 
-    -- Если авто-сохранение включено — сообщаем путь
-    if autoSave and _autoFile then
-        lp("  Авто-файл   : " .. _autoFile)
+    -- Итоговый .txt (если executor даёт writefile)
+    if autoSave then
+        if writefile then
+            local path = resolveDir() .. "dump_" .. tsNow() .. ".txt"
+            lp("  Файл .txt   : " .. path)
+            local ok, err = saveFullLog(path)
+            if not ok then lp("  ✗ Ошибка записи txt: " .. tostring(err)) end
+        else
+            lp("  ✗ writefile недоступен — txt не создан (используй 📋 Копировать)")
+        end
     end
-
     DumpBtn.Text = "✓ Готово за " .. elapsed .. "с"
     DumpBtn.BackgroundColor3 = Color3.fromRGB(30, 80, 40)
     task.delay(4, function()
@@ -1171,228 +1226,538 @@ DumpBtn.MouseButton1Up:Connect(doFullDump)
 -- ⚡ РЕАЛ-ТАЙМ ДВИЖОК — секции 21–24
 -- ================================================================
 
--- Снапшот числовых значений для отслеживания дельты
-local _rtSnapshot = {}
+-- ⚡ РЕАЛ-ТАЙМ ДВИЖОК v2 — ловит ВСЕ события, а не только валюту.
+-- Подписки на события (Changed / DescendantAdded / OnClientEvent ...) вместо опроса.
+-- Каждое событие: время + тип + путь + что изменилось. Всё пишется в realtime_*.txt.
 
-local function rtSnapValue(path, val)
-    local n = tonumber(val)
-    if not n then return end
-    local prev = _rtSnapshot[path]
-    _rtSnapshot[path] = n
-    if prev ~= nil and prev ~= n then
-        local delta = n - prev
-        local sign = delta > 0 and "▲ +" or "▼ "
-        rtLog(string.format("[ИЗМЕНЕНИЕ] %s  %s%s  (было %.4g → стало %.4g)",
-            path, sign, tostring(delta), prev, n))
+local RT_CFG = {
+    values     = true,  -- любые Value-объекты (Int/Number/String/Bool/Object...) у игроков, RS, Workspace
+    attrs      = true,  -- атрибуты (Attributes) на объектах игроков / RS / персонажа
+    structure  = true,  -- добавление / удаление объектов (инвентарь, предметы, трейды, GUI)
+    gui        = true,  -- смена текста, Visible / Enabled у окон и попапов
+    remotesIn  = true,  -- RemoteEvent сервер → клиент
+    remotesOut = true,  -- FireServer / InvokeServer клиент → сервер (нужен hookmetamethod)
+    bindables  = true,  -- BindableEvent внутри игры
+    players    = true,  -- вход / выход игроков
+    chat       = true,  -- сообщения чата
+    character  = true,  -- спавн, смерть, здоровье, состояния персонажа
+    purchases  = true,  -- покупки за Robux / геймпассы
+    console    = true,  -- print / warn / error самой игры
+    workspace  = true,  -- верхний уровень Workspace (новые объекты на карте)
+}
+
+local RT_FLUSH_INTERVAL = 2      -- как часто сбрасывать лог в .txt (сек)
+local SPAM_LIMIT, SPAM_WINDOW = 8, 5   -- не больше 8 строк от одного источника за 5 сек
+
+local RT_ROOTS = {
+    { name = "Players",           mode = "full", structure = true  },
+    { name = "ReplicatedStorage", mode = "full", structure = true  },
+    { name = "Workspace",         mode = "lite", structure = false },
+    { name = "ReplicatedFirst",   mode = "lite", structure = false },
+    { name = "Lighting",          mode = "lite", structure = false },
+    { name = "Teams",             mode = "lite", structure = false },
+}
+
+local _rtConns      = {}
+local _rtHooked     = setmetatable({}, { __mode = "k" })
+local _rtSpam       = {}
+local _rtOutHooked  = false
+local _rtSession    = 0
+local _rtPG         = nil
+local _rtCount      = { values = 0, remotes = 0, hooked = 0 }
+
+local function rtConn(c)
+    if c then table.insert(_rtConns, c) end
+end
+
+local function rtPath(inst)
+    local ok, n = pcall(inst.GetFullName, inst)
+    return ok and n or tostring(inst)
+end
+
+-- Сериализация аргументов (JSONEncode ломается на Instance / Vector3 и т.п.)
+local function rtSer(v, depth)
+    depth = depth or 0
+    local t = typeof(v)
+    if t == "string" then
+        return '"' .. v:sub(1, 100) .. '"'
+    elseif t == "number" or t == "boolean" or t == "nil" then
+        return tostring(v)
+    elseif t == "Instance" then
+        return "<" .. rtPath(v) .. ">"
+    elseif t == "table" then
+        if depth >= 3 then return "{…}" end
+        local parts, n = {}, 0
+        for k, x in pairs(v) do
+            n = n + 1
+            if n > 12 then
+                parts[#parts + 1] = "…"
+                break
+            end
+            parts[#parts + 1] = tostring(k) .. "=" .. rtSer(x, depth + 1)
+        end
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    return t .. ":" .. tostring(v)
+end
+
+local function rtArgs(args)
+    local parts = {}
+    for i = 1, args.n do parts[i] = rtSer(args[i]) end
+    local s = table.concat(parts, ", ")
+    if #s > 300 then s = s:sub(1, 300) .. "…" end
+    return s
+end
+
+local function rtFmt(v)
+    local t = typeof(v)
+    if t == "string" then return "«" .. v:sub(1, 120) .. "»" end
+    if t == "Instance" then return rtPath(v) end
+    return tostring(v):sub(1, 120)
+end
+
+-- ── Антиспам: быстро меняющиеся таймеры / счётчики не забивают лог ──
+local function rtSweepSpam(force)
+    local now = tick()
+    for k, s in pairs(_rtSpam) do
+        if force or now - s.t0 > s.win then
+            if s.skipped > 0 then
+                rtLog("[спам скрыт] " .. k .. " — ещё " .. s.skipped .. " событий за " .. s.win .. "с")
+            end
+            _rtSpam[k] = nil
+        end
     end
 end
 
--- ── 21. РЕАЛ-ТАЙМ: ВАЛЮТА / СТАТЫ / LEADERSTATS ─────────────────
-local function rt21_Stats()
-    -- leaderstats
-    local ls = LP:FindFirstChild("leaderstats")
-    if ls then
-        for _, v in ipairs(ls:GetDescendants()) do
-            local val = ""
-            pcall(function() val = tostring(v.Value) end)
-            rtSnapValue("leaderstats/" .. v.Name, val)
+local function rtEvent(key, msg, limit, window)
+    if not rtActive then return end
+    limit  = limit  or SPAM_LIMIT
+    window = window or SPAM_WINDOW
+    local now = tick()
+    local s = _rtSpam[key]
+    if s and now - s.t0 > s.win then
+        if s.skipped > 0 then
+            rtLog("[спам скрыт] " .. key .. " — ещё " .. s.skipped .. " событий за " .. s.win .. "с")
+        end
+        s = nil
+    end
+    if not s then
+        s = { t0 = now, n = 0, skipped = 0, win = window }
+        _rtSpam[key] = s
+    end
+    s.n = s.n + 1
+    if s.n > limit then
+        s.skipped = s.skipped + 1
+        return
+    end
+    rtLog(msg)
+end
+
+-- Каждую подписку на объект делаем один раз
+local function once(inst, flag)
+    local f = _rtHooked[inst]
+    if not f then
+        f = {}
+        _rtHooked[inst] = f
+    end
+    if f[flag] then return false end
+    f[flag] = true
+    _rtCount.hooked = _rtCount.hooked + 1
+    return true
+end
+
+-- ── Value-объекты: валюта, статы, любые счётчики ──
+local function hookValue(inst)
+    if not once(inst, "v") then return end
+    _rtCount.values = _rtCount.values + 1
+    local last
+    pcall(function() last = inst.Value end)
+    rtConn(inst.Changed:Connect(function(new)
+        local old = last
+        last = new
+        if not rtActive then return end
+        local path = rtPath(inst)
+        local msg
+        if type(new) == "number" and type(old) == "number" then
+            local d = new - old
+            msg = string.format("[ЗНАЧЕНИЕ] %s  %s%.6g  (было %.6g → стало %.6g)",
+                path, d > 0 and "▲ +" or "▼ ", d, old, new)
+        else
+            msg = "[ЗНАЧЕНИЕ] " .. path .. "  " .. rtFmt(old) .. " → " .. rtFmt(new)
+        end
+        rtEvent("val:" .. path, msg)
+    end))
+end
+
+-- ── Атрибуты ──
+local function hookAttrs(inst)
+    if not once(inst, "a") then return end
+    local ok, prev = pcall(inst.GetAttributes, inst)
+    if not ok then return end
+    rtConn(inst.AttributeChanged:Connect(function(name)
+        local new = inst:GetAttribute(name)
+        local old = prev[name]
+        prev[name] = new
+        if not rtActive then return end
+        local path = rtPath(inst) .. "@" .. name
+        local msg
+        if type(new) == "number" and type(old) == "number" then
+            local d = new - old
+            msg = string.format("[АТРИБУТ] %s  %s%.6g  (было %.6g → стало %.6g)",
+                path, d > 0 and "▲ +" or "▼ ", d, old, new)
+        else
+            msg = "[АТРИБУТ] " .. path .. "  " .. rtFmt(old) .. " → " .. rtFmt(new)
+        end
+        rtEvent("attr:" .. path, msg)
+    end))
+end
+
+-- ── GUI: смена текста, показ / скрытие окон и попапов ──
+local function hookGui(inst, pg)
+    if not pg or not inst:IsDescendantOf(pg) then return end
+
+    if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
+        if once(inst, "t") then
+            local last = inst.Text
+            rtConn(inst:GetPropertyChangedSignal("Text"):Connect(function()
+                local new = inst.Text
+                local old = last
+                last = new
+                if not rtActive or old == new or (old == "" and new == "") then return end
+                local path = rtPath(inst)
+                rtEvent("txt:" .. path,
+                    "[GUI-текст] " .. path .. "  " .. rtFmt(old:sub(1, 80)) .. " → " .. rtFmt(new:sub(1, 80)),
+                    6, 30)
+            end))
         end
     end
-    -- Все Folder в LP
-    for _, folder in ipairs(LP:GetChildren()) do
-        if folder:IsA("Folder") then
-            for _, v in ipairs(folder:GetDescendants()) do
-                local val = ""
-                pcall(function() val = tostring(v.Value) end)
-                rtSnapValue(folder.Name .. "/" .. v.Name, val)
-            end
+
+    if inst:IsA("GuiObject") then
+        if once(inst, "vis") then
+            local last = inst.Visible
+            rtConn(inst:GetPropertyChangedSignal("Visible"):Connect(function()
+                local new = inst.Visible
+                if not rtActive or new == last then return end
+                last = new
+                local path = rtPath(inst)
+                rtEvent("vis:" .. path,
+                    "[GUI-окно] " .. path .. " → " .. (new and "ПОКАЗАНО" or "СКРЫТО"), 6, 30)
+            end))
         end
-    end
-    -- Атрибуты игрока
-    local attrs = LP:GetAttributes()
-    for k, v in pairs(attrs) do
-        rtSnapValue("PlayerAttr/" .. k, tostring(v))
+    elseif inst:IsA("ScreenGui") then
+        if once(inst, "en") then
+            local last = inst.Enabled
+            rtConn(inst:GetPropertyChangedSignal("Enabled"):Connect(function()
+                local new = inst.Enabled
+                if not rtActive or new == last then return end
+                last = new
+                local path = rtPath(inst)
+                rtEvent("en:" .. path,
+                    "[GUI-экран] " .. path .. " → " .. (new and "ВКЛЮЧЁН" or "ВЫКЛЮЧЕН"), 6, 30)
+            end))
+        end
     end
 end
 
--- ── 22. РЕАЛ-ТАЙМ: REMOTES — перехват входящих событий ───────────
-local _rtHooked = {}
-local function rt22_HookRemotes()
-    for _, obj in ipairs(RS:GetDescendants()) do
-        if obj.ClassName == "RemoteEvent" and not _rtHooked[obj] then
-            _rtHooked[obj] = true
-            pcall(function()
-                obj.OnClientEvent:Connect(function(...)
-                    if not rtActive then return end
-                    local args = {...}
-                    local parts = {}
-                    for i, a in ipairs(args) do
-                        local s = ""
-                        pcall(function()
-                            s = HttpService:JSONEncode(a)
-                        end)
-                        if s == "" then s = tostring(a) end
-                        parts[i] = s
-                    end
-                    rtLog("[RE→Client] " .. obj:GetFullName()
-                        .. "  args: " .. table.concat(parts, ", "):sub(1, 200))
-                end)
-            end)
+-- ── Remote / Bindable события (сервер → клиент) ──
+local function hookRemote(inst)
+    if RT_CFG.remotesIn and (inst:IsA("RemoteEvent") or inst.ClassName == "UnreliableRemoteEvent") then
+        if once(inst, "re") then
+            _rtCount.remotes = _rtCount.remotes + 1
+            rtConn(inst.OnClientEvent:Connect(function(...)
+                if not rtActive then return end
+                local args = table.pack(...)
+                local path = rtPath(inst)
+                rtEvent("re:" .. path, "[СЕРВЕР→КЛИЕНТ] " .. path .. "  args: " .. rtArgs(args), 20, 5)
+            end))
+        end
+    elseif RT_CFG.bindables and inst:IsA("BindableEvent") then
+        if once(inst, "be") then
+            rtConn(inst.Event:Connect(function(...)
+                if not rtActive then return end
+                local args = table.pack(...)
+                local path = rtPath(inst)
+                rtEvent("be:" .. path, "[BINDABLE] " .. path .. "  args: " .. rtArgs(args), 20, 5)
+            end))
         end
     end
 end
 
--- ── 23. РЕАЛ-ТАЙМ: ИНВЕНТАРЬ — отслеживание добавления/удаления ──
-local _rtInvSnapshot = {}
-local function rt23_Inventory()
-    -- Собираем текущее состояние дочерних объектов папок инвентаря
-    local invKeywords = {"inventory","items","pets","owned","collection","popit","equip"}
-    local function isInv(name)
-        local lo = name:lower()
-        for _, kw in ipairs(invKeywords) do
-            if lo:find(kw) then return true end
-        end
-        return false
-    end
-
-    local function scanFolder(folder)
-        local set = {}
-        pcall(function()
-            for _, child in ipairs(folder:GetChildren()) do
-                set[child.Name] = child.ClassName
-            end
-        end)
-        return set
-    end
-
-    local sources = {}
-    for _, obj in ipairs(LP:GetChildren()) do
-        if obj:IsA("Folder") and isInv(obj.Name) then
-            table.insert(sources, obj)
-        end
-    end
-    for _, obj in ipairs(RS:GetChildren()) do
-        if obj:IsA("Folder") and isInv(obj.Name) then
-            table.insert(sources, obj)
-        end
-    end
-
-    for _, folder in ipairs(sources) do
-        local path = folder:GetFullName()
-        local current = scanFolder(folder)
-        local prev    = _rtInvSnapshot[path] or {}
-
-        for name, cls in pairs(current) do
-            if not prev[name] then
-                rtLog("[ИНВ +ДОБАВЛЕНО] " .. path .. "/" .. name .. " [" .. cls .. "]")
-            end
-        end
-        for name, cls in pairs(prev) do
-            if not current[name] then
-                rtLog("[ИНВ -УДАЛЕНО]   " .. path .. "/" .. name .. " [" .. cls .. "]")
-            end
-        end
-        _rtInvSnapshot[path] = current
+-- mode "full" — всё; mode "lite" — только Value-объекты и remotes (для тяжёлого Workspace)
+local function hookInstance(inst, mode, pg)
+    if RT_CFG.values and inst:IsA("ValueBase") then hookValue(inst) end
+    hookRemote(inst)
+    if mode == "full" then
+        if RT_CFG.attrs then hookAttrs(inst) end
+        if RT_CFG.gui then hookGui(inst, pg) end
     end
 end
 
--- ── 24. РЕАЛ-ТАЙМ: УВЕДОМЛЕНИЯ / GUI ПОПАПЫ ─────────────────────
--- Следим за появлением новых ScreenGui / Frame / TextLabel в PlayerGui
-local _rtGuiSnapshot = {}
-local function rt24_GuiPopups()
-    local pg = LP:FindFirstChild("PlayerGui")
-    if not pg then return end
+-- Подписка на новые / удалённые объекты в дереве
+local function watchTree(root, mode, withStructure)
+    rtConn(root.DescendantAdded:Connect(function(d)
+        if not rtActive then return end
+        pcall(hookInstance, d, mode, _rtPG)
+        if withStructure and RT_CFG.structure then
+            local par = d.Parent and rtPath(d.Parent) or "?"
+            local extra = ""
+            if d:IsA("ValueBase") then
+                pcall(function() extra = " = " .. rtFmt(d.Value) end)
+            end
+            rtEvent("add:" .. par,
+                "[+ДОБАВЛЕНО] " .. rtPath(d) .. " [" .. d.ClassName .. "]" .. extra, 12, 5)
+        end
+    end))
+    if withStructure and RT_CFG.structure then
+        rtConn(root.DescendantRemoving:Connect(function(d)
+            if not rtActive then return end
+            local par = d.Parent and rtPath(d.Parent) or "?"
+            rtEvent("del:" .. par,
+                "[−УДАЛЕНО] " .. rtPath(d) .. " [" .. d.ClassName .. "]", 12, 5)
+        end))
+    end
+end
 
-    local current = {}
-    for _, gui in ipairs(pg:GetChildren()) do
-        current[gui.Name] = gui.ClassName
-        -- Ищем TextLabel с изменившимся текстом (попапы, уведомления)
-        for _, obj in ipairs(gui:GetDescendants()) do
-            if obj:IsA("TextLabel") or obj:IsA("TextButton") then
-                local txt = ""
-                pcall(function() txt = obj.Text end)
-                if txt ~= "" and txt ~= "..." then
-                    local key = obj:GetFullName()
-                    if _rtGuiSnapshot[key] ~= txt then
-                        if _rtGuiSnapshot[key] ~= nil then
-                            rtLog("[GUI изменение] " .. key
-                                .. "  «" .. tostring(_rtGuiSnapshot[key]):sub(1,80)
-                                .. "» → «" .. txt:sub(1,80) .. "»")
-                        end
-                        _rtGuiSnapshot[key] = txt
-                    end
+-- Первичный проход по уже существующим объектам (с паузами, чтобы не фризить игру)
+local function scanTree(root, mode, alive)
+    local ok, list = pcall(root.GetDescendants, root)
+    if not ok then return end
+    for i = 1, #list do
+        if not alive() then return end
+        pcall(hookInstance, list[i], mode, _rtPG)
+        if i % 1500 == 0 then task.wait() end
+    end
+end
+
+-- ── Исходящие вызовы клиент → сервер (если executor умеет hookmetamethod) ──
+local function rtHookOutgoing()
+    if _rtOutHooked or not (hookmetamethod and getnamecallmethod) then return false end
+    local ok = pcall(function()
+        local old
+        local hook = function(self, ...)
+            local method = getnamecallmethod()
+            if rtActive and RT_CFG.remotesOut
+                and (method == "FireServer" or method == "InvokeServer") then
+                local okc, cn = pcall(function() return self.ClassName end)
+                if okc and (cn == "RemoteEvent" or cn == "RemoteFunction"
+                    or cn == "UnreliableRemoteEvent") then
+                    local args = table.pack(...)
+                    task.defer(function()
+                        local path = rtPath(self)
+                        rtEvent("out:" .. path,
+                            "[КЛИЕНТ→СЕРВЕР] " .. path .. "  " .. method .. "(" .. rtArgs(args) .. ")",
+                            20, 5)
+                    end)
                 end
             end
+            return old(self, ...)
         end
-    end
-
-    -- Новые ScreenGui (попапы, наградные окна)
-    local prev = _rtGuiSnapshot["__guiNames__"] or {}
-    for name, cls in pairs(current) do
-        if not prev[name] then
-            rtLog("[GUI НОВЫЙ] " .. name .. " [" .. cls .. "]")
-        end
-    end
-    for name in pairs(prev) do
-        if not current[name] then
-            rtLog("[GUI ЗАКРЫТ] " .. name)
-        end
-    end
-    _rtGuiSnapshot["__guiNames__"] = current
+        old = hookmetamethod(game, "__namecall", newcclosure and newcclosure(hook) or hook)
+    end)
+    _rtOutHooked = ok
+    return ok
 end
 
--- ── RT главный цикл ───────────────────────────────────────────────
-local RT_INTERVAL = 1.0  -- секунда между тиками
+-- ── Игроки, чат, персонаж, покупки, консоль, верхний уровень Workspace ──
+local function hookChatLegacy(p)
+    if not once(p, "chat") then return end
+    rtConn(p.Chatted:Connect(function(msg)
+        rtEvent("chat", "[ЧАТ] " .. p.Name .. ": " .. tostring(msg):sub(1, 200), 20, 10)
+    end))
+end
 
+local function hookCharacter(char, alive)
+    if not RT_CFG.character or not char then return end
+    rtLog("[ПЕРСОНАЖ] заспавнился: " .. rtPath(char))
+    task.spawn(function()
+        if alive() then
+            scanTree(char, "full", alive)
+            watchTree(char, "full", true)
+        end
+        local hum = char:WaitForChild("Humanoid", 5)
+        if hum and alive() then
+            rtConn(hum.Died:Connect(function() rtEvent("died", "[ПЕРСОНАЖ] умер", 5, 5) end))
+            local lastHp = hum.Health
+            rtConn(hum.HealthChanged:Connect(function(hp)
+                local d = hp - lastHp
+                lastHp = hp
+                rtEvent("hp", string.format("[ПЕРСОНАЖ] здоровье %.4g (%s%.4g)",
+                    hp, d >= 0 and "+" or "", d), 10, 5)
+            end))
+            rtConn(hum.StateChanged:Connect(function(o, n)
+                rtEvent("state", "[ПЕРСОНАЖ] состояние " .. tostring(o) .. " → " .. tostring(n), 10, 5)
+            end))
+        end
+    end)
+end
+
+local function rtWatchExtras(alive)
+    -- игроки
+    if RT_CFG.players then
+        rtConn(Players.PlayerAdded:Connect(function(p)
+            rtLog("[ИГРОК +] " .. p.Name .. " (" .. p.DisplayName .. ")")
+        end))
+        rtConn(Players.PlayerRemoving:Connect(function(p)
+            rtLog("[ИГРОК −] " .. p.Name .. " (" .. p.DisplayName .. ")")
+        end))
+    end
+
+    -- чат
+    if RT_CFG.chat then
+        local usedTCS = false
+        pcall(function()
+            local TCS = game:GetService("TextChatService")
+            if TCS.ChatVersion == Enum.ChatVersion.TextChatService then
+                usedTCS = true
+                rtConn(TCS.MessageReceived:Connect(function(m)
+                    local who = m.TextSource and m.TextSource.Name or "система"
+                    rtEvent("chat", "[ЧАТ] " .. who .. ": " .. tostring(m.Text):sub(1, 200), 20, 10)
+                end))
+            end
+        end)
+        if not usedTCS then
+            for _, p in ipairs(Players:GetPlayers()) do hookChatLegacy(p) end
+            rtConn(Players.PlayerAdded:Connect(hookChatLegacy))
+        end
+    end
+
+    -- персонаж
+    if RT_CFG.character then
+        if LP.Character then hookCharacter(LP.Character, alive) end
+        rtConn(LP.CharacterAdded:Connect(function(c) hookCharacter(c, alive) end))
+        rtConn(LP.CharacterRemoving:Connect(function() rtLog("[ПЕРСОНАЖ] удалён") end))
+    end
+
+    -- покупки
+    if RT_CFG.purchases then
+        local MPS = game:GetService("MarketplaceService")
+        pcall(function()
+            rtConn(MPS.PromptProductPurchaseFinished:Connect(function(uid, pid, bought)
+                rtLog("[ПОКУПКА] продукт " .. tostring(pid) .. " user " .. tostring(uid)
+                    .. " → " .. (bought and "куплено" or "отмена"))
+            end))
+        end)
+        pcall(function()
+            rtConn(MPS.PromptGamePassPurchaseFinished:Connect(function(plr, id, bought)
+                rtLog("[ПОКУПКА] геймпасс " .. tostring(id) .. " → " .. (bought and "куплено" or "отмена"))
+            end))
+        end)
+        pcall(function()
+            rtConn(MPS.PromptPurchaseFinished:Connect(function(plr, id, bought)
+                rtLog("[ПОКУПКА] ассет " .. tostring(id) .. " → " .. (bought and "куплено" or "отмена"))
+            end))
+        end)
+    end
+
+    -- консоль игры (print / warn / error)
+    if RT_CFG.console then
+        pcall(function()
+            local LS = game:GetService("LogService")
+            rtConn(LS.MessageOut:Connect(function(msg, mtype)
+                local kind = "OUT"
+                if mtype == Enum.MessageType.MessageError then kind = "ERR"
+                elseif mtype == Enum.MessageType.MessageWarning then kind = "WARN" end
+                rtEvent("con:" .. msg:sub(1, 40), "[КОНСОЛЬ " .. kind .. "] " .. msg:sub(1, 250), 3, 10)
+            end))
+        end)
+    end
+
+    -- верхний уровень Workspace
+    if RT_CFG.workspace then
+        rtConn(workspace.ChildAdded:Connect(function(c)
+            rtEvent("wsadd", "[WORKSPACE +] " .. c.Name .. " [" .. c.ClassName .. "]", 15, 5)
+        end))
+        rtConn(workspace.ChildRemoved:Connect(function(c)
+            rtEvent("wsdel", "[WORKSPACE −] " .. c.Name .. " [" .. c.ClassName .. "]", 15, 5)
+        end))
+    end
+
+    -- исходящие ремоуты
+    if RT_CFG.remotesOut then
+        if not rtHookOutgoing() and not _rtOutHooked then
+            rtLog("  (!) hookmetamethod недоступен — исходящие FireServer не логируются")
+        end
+    end
+end
+
+-- ── Запуск / остановка ──
 local function startRealtime()
     if rtActive then return end
     rtActive = true
-    rtBuf = {}
-    _rtSnapshot = {}
-    _rtInvSnapshot = {}
-    _rtGuiSnapshot = {}
+    _rtSession = _rtSession + 1
+    local session = _rtSession
+    local function alive() return rtActive and _rtSession == session end
 
-    -- Создаём RT-файл
+    rtBuf, rtPending = {}, {}
+    _rtSpam = {}
+    _rtHooked = setmetatable({}, { __mode = "k" })
+    _rtConns = {}
+    _rtCount = { values = 0, remotes = 0, hooked = 0 }
+    _rtPG = LP:FindFirstChildOfClass("PlayerGui")
+
+    -- RT .txt файл (пишется всё время, пока реал-тайм включён)
+    rtFile = nil
     if writefile then
-        pcall(function()
-            if not isfolder(DUMP_DIR) then makefolder(DUMP_DIR) end
-            local ts = os.date and os.date("%Y%m%d_%H%M%S") or tostring(tick()):gsub("%.", "_")
-            rtFile = DUMP_DIR .. "realtime_" .. ts .. ".txt"
-            writefile(rtFile, "=== РЕАЛ-ТАЙМ ДО " .. ts .. " ===\n")
+        local ok = pcall(function()
+            local path = resolveDir() .. "realtime_" .. tsNow() .. ".txt"
+            writefile(path, "=== РЕАЛ-ТАЙМ " .. tsNow() .. " ===\n")
+            rtFile = path
         end)
+        if not ok then rtFile = nil end
     end
 
     rtLog("=== Реал-тайм запущен ===")
-    rtLog("  Интервал: " .. RT_INTERVAL .. " сек")
-    rtLog("  Секции: 21(статы) 22(ремоуты) 23(инвентарь) 24(GUI)")
-
-    -- Однократно цепляем хуки RE (секция 22)
-    rt22_HookRemotes()
+    rtLog("  Файл: " .. (rtFile or "НЕТ (writefile недоступен — запись в txt невозможна)"))
+    local on = {}
+    for k, v in pairs(RT_CFG) do if v then on[#on + 1] = k end end
+    table.sort(on)
+    rtLog("  Ловим: " .. table.concat(on, ", "))
 
     rtThread = task.spawn(function()
-        local tick0 = tick()
-        while rtActive do
-            local t = math.floor(tick() - tick0)
-            rtLog("\n── тик " .. t .. "с ──────────────────────────")
-            pcall(rt21_Stats)
-            pcall(rt23_Inventory)
-            pcall(rt24_GuiPopups)
-            -- Перехватываем новые ремоуты если появились
-            pcall(rt22_HookRemotes)
-            task.wait(RT_INTERVAL)
+        -- 1) подписки на новые события
+        for _, r in ipairs(RT_ROOTS) do
+            local ok, svc = pcall(game.GetService, game, r.name)
+            if ok and svc then pcall(watchTree, svc, r.mode, r.structure) end
         end
-        rtLog("\n=== Реал-тайм остановлен ===")
+        pcall(rtWatchExtras, alive)
+
+        -- 2) подписка на всё, что уже существует
+        task.spawn(function()
+            for _, r in ipairs(RT_ROOTS) do
+                if not alive() then return end
+                local ok, svc = pcall(game.GetService, game, r.name)
+                if ok and svc then scanTree(svc, r.mode, alive) end
+            end
+            if alive() then
+                rtLog(string.format("  Подписано: объектов %d, Value %d, Remote %d",
+                    _rtCount.hooked, _rtCount.values, _rtCount.remotes))
+            end
+        end)
+
+        -- 3) периодический сброс в файл + чистка антиспама
+        while alive() do
+            task.wait(RT_FLUSH_INTERVAL)
+            pcall(rtSweepSpam)
+            rtFlush()
+        end
     end)
 
     RTBtn.Text = "⚡  Реал-тайм: ВКЛ"
     RTBtn.BackgroundColor3 = Color3.fromRGB(30, 110, 50)
-    -- Автоматически открыть RT лог
     RTF.Visible = true
 end
 
 local function stopRealtime()
+    if not rtActive then return end
     rtActive = false
+    for _, c in ipairs(_rtConns) do
+        pcall(function() c:Disconnect() end)
+    end
+    _rtConns = {}
     rtThread = nil
+    rtSweepSpam(true)
+    rtLog("=== Реал-тайм остановлен ===")
+    rtFlush()
     RTBtn.Text = "⚡  Реал-тайм: ВЫКЛ"
     RTBtn.BackgroundColor3 = Color3.fromRGB(50, 40, 20)
 end
@@ -1402,6 +1767,6 @@ RTBtn.MouseButton1Up:Connect(function()
 end)
 
 -- Останавливаем RT при выходе из игры
-game:GetService("Players").LocalPlayer.AncestryChanged:Connect(function()
+LP.AncestryChanged:Connect(function()
     stopRealtime()
 end)
