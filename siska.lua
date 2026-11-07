@@ -1059,31 +1059,76 @@ end)
 -- ╔══════════════════════════════════════╗
 -- ║  INIT                                ║
 -- ╚══════════════════════════════════════╝
--- Меню появляется сразу. Все хуки ставятся в фоне, по одному, с паузами —
--- игра не подвисает, а хуки работают как раньше.
+-- ╔══════════════════════════════════════════════════╗
+-- ║  CRASH GUARD для хуков                           ║
+-- ║  Перед установкой хука пишем "pending:имя" в     ║
+-- ║  siska_boot.txt. Если игра вылетела во время     ║
+-- ║  хука, при следующем запуске он помечается bad   ║
+-- ║  и пропускается. Сброс: удалить siska_boot.txt   ║
+-- ╚══════════════════════════════════════════════════╝
+local BOOT_FILE = "siska_boot.txt"
+local badHooks, pendingHook = {}, nil
+
+local function readBoot()
+    if not (isfile and readfile) then return end
+    local ok, text = pcall(function()
+        if isfile(BOOT_FILE) then return readfile(BOOT_FILE) end
+    end)
+    if not ok or type(text) ~= "string" then return end
+    for line in text:gmatch("[^\r\n]+") do
+        local kind, name = line:match("^(%a+):(.+)$")
+        if kind == "bad" then badHooks[name] = true end
+        if kind == "pending" then badHooks[name] = true; pendingHook = name end  -- вылетели на нём
+    end
+end
+
+local function writeBoot(pending)
+    if not writefile then return end
+    local out = {}
+    for name in pairs(badHooks) do out[#out+1] = "bad:" .. name end
+    if pending then out[#out+1] = "pending:" .. pending end
+    pcall(writefile, BOOT_FILE, table.concat(out, "\n"))
+end
+
+local function safeHook(name, fn)
+    if badHooks[name] then
+        print("[Z] хук " .. name .. " пропущен (из-за него был вылет). Сброс: удали " .. BOOT_FILE)
+        return false
+    end
+    writeBoot(name)          -- если игра упадёт прямо сейчас — запомнится имя
+    local ok = pcall(fn)
+    writeBoot(nil)           -- прошло без вылета
+    return ok
+end
+
+-- Меню появляется сразу. Хуки ставятся в фоне, по одному, когда игра уже загрузилась.
 loadConfig()   -- подгружаем сохранённые настройки (если файла нет — всё по умолчанию)
+readBoot()
+if pendingHook then
+    print("[Z] прошлый запуск вылетел на хуке: " .. pendingHook .. " — он отключён")
+end
+writeBoot(nil)
 buildGui()
 task.spawn(function()
+    if not game:IsLoaded() then game.Loaded:Wait() end
+    task.wait(3)                       -- даём игре полностью прогрузиться
+    pcall(setupGuiWatcher)             -- авто-скрытие TrainingSequence / ThrowSequence
+    pcall(setupReturnBlock)            -- блокируем return TP при броске
     task.wait(1)
-    local steps = {
-        setupGuiWatcher,    -- авто-скрытие TrainingSequence / ThrowSequence
-        setupReturnBlock,   -- блокируем return TP при броске
-        hookReplicaSet,     -- патч ReplicaSet для stat inject
-        hookThrowPower,     -- хук InvokeServer (только Throw_Start)
-        hookNewindex,       -- патч __newindex (быстрый путь)
-    }
-    for _, fn in ipairs(steps) do
-        pcall(fn)
-        task.wait(0.4)      -- пауза между хуками, чтобы не было фриза
-    end
+    safeHook("ReplicaSet", hookReplicaSet)   -- патч ReplicaSet для stat inject
+    task.wait(1.5)
+    safeHook("InvokeServer", hookThrowPower) -- хук InvokeServer (только Throw_Start)
+    task.wait(1.5)
+    safeHook("newindex", hookNewindex)       -- патч __newindex (самый рискованный — последним)
+    task.wait(1)
     task.spawn(setupTrainingBonusHook)  -- WaitForChild внутри, не блокирует
-    -- запускаем то, что было включено в сохранённом конфиге (после установки хуков)
-    for _, start in ipairs(pendingRestore) do
-        pcall(start)
-        task.wait(0.1)
-    end
     print("[Z] Hooks: ReplicaSet=" .. (replicaHooked and "✓" or "✗")
         .. "  __newindex=" .. (niHooked and "✓" or "✗")
         .. "  throwHook=" .. (throwHooked and "✓" or "✗"))
+    -- запускаем то, что было включено в сохранённом конфиге (после установки хуков)
+    for _, start in ipairs(pendingRestore) do
+        pcall(start)
+        task.wait(0.3)
+    end
 end)
 print("[Z] v7.0 Ghost loaded ✓  |  RCtrl = show/hide")
