@@ -89,7 +89,7 @@ SG.Parent = game:GetService("CoreGui")
 -- ГЛАВНОЕ МЕНЮ (компактное, только кнопки управления)
 -- ================================================================
 local menuCollapsed = false
-local MENU_H_EXPANDED  = 190   -- высота со всеми кнопками
+local MENU_H_EXPANDED  = 280   -- высота со всеми кнопками
 local MENU_H_COLLAPSED = 40    -- только title bar
 
 local F = Instance.new("Frame", SG)
@@ -195,11 +195,14 @@ local function makeBtn(parent, text, color, order)
     return b
 end
 
-local DumpBtn  = makeBtn(BtnBox, "▶  Run Ultra Dump",   Color3.fromRGB(40, 40, 90),  1)
-local LogBtn   = makeBtn(BtnBox, "📄  Лог",              Color3.fromRGB(40, 70, 90),  2)
+local DumpBtn  = makeBtn(BtnBox, "▶  Run Ultra Dump",       Color3.fromRGB(40, 40, 90),  1)
+local LogBtn   = makeBtn(BtnBox, "📄  Лог дампа",            Color3.fromRGB(40, 70, 90),  2)
+local RTBtn    = makeBtn(BtnBox, "⚡  Реал-тайм: ВЫКЛ",      Color3.fromRGB(50, 40, 20),  3)
+RTBtn.TextSize = 12
+local RTLogBtn = makeBtn(BtnBox, "📡  RT Лог",               Color3.fromRGB(30, 60, 80),  4)
 
 -- Переключатель авто-сохранения
-local AutoBtn = makeBtn(BtnBox, "💾  Авто-сохранение: ВЫКЛ", Color3.fromRGB(50, 50, 50), 3)
+local AutoBtn = makeBtn(BtnBox, "💾  Авто-сохранение: ВЫКЛ", Color3.fromRGB(50, 50, 50), 5)
 AutoBtn.TextSize = 12
 AutoBtn.MouseButton1Up:Connect(function()
     autoSave = not autoSave
@@ -391,6 +394,175 @@ LogText.TextXAlignment = Enum.TextXAlignment.Left
 LogText.TextYAlignment = Enum.TextYAlignment.Top
 LogText.TextWrapped = true
 LogText.Text = "(пусто — нажми Run Ultra Dump)"
+
+-- ================================================================
+-- РЕАЛ-ТАЙМ СОСТОЯНИЕ
+-- ================================================================
+local rtActive   = false
+local rtThread   = nil      -- coroutine/task handle
+local rtBuf      = {}       -- отдельный лог RT
+local rtLogText  = nil      -- TextLabel в окне RT
+local rtFile     = nil      -- путь к RT-файлу
+local rtDirty    = false
+
+local function rtLog(s)
+    table.insert(rtBuf, s)
+    if writefile and rtFile then
+        pcall(function()
+            local ok, ex = pcall(readfile, rtFile)
+            writefile(rtFile, (ok and ex or "") .. s .. "\n")
+        end)
+    end
+    if rtLogText and not rtDirty then
+        rtDirty = true
+        task.defer(function()
+            rtDirty = false
+            if rtLogText then
+                rtLogText.Text = table.concat(rtBuf, "\n")
+                local scr = rtLogText.Parent
+                if scr and scr:IsA("ScrollingFrame") then
+                    scr.CanvasPosition = Vector2.new(0, 1e9)
+                end
+            end
+        end)
+    end
+end
+
+-- ================================================================
+-- ОКНО RT-ЛОГА
+-- ================================================================
+local RTF = Instance.new("Frame", SG)
+RTF.Size = UDim2.new(0, 310, 1, -80)
+RTF.Position = UDim2.new(0, 554, 0, 60)
+RTF.BackgroundColor3 = Color3.fromRGB(8, 10, 8)
+RTF.BorderSizePixel = 0
+RTF.ClipsDescendants = true
+RTF.Visible = false
+Instance.new("UICorner", RTF).CornerRadius = UDim.new(0, 12)
+local rtfs = Instance.new("UIStroke", RTF)
+rtfs.Color = Color3.fromRGB(50, 140, 70)
+rtfs.Thickness = 1
+
+local rtdrag, rtds, rtdp = false, nil, nil
+RTF.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch
+    or i.UserInputType == Enum.UserInputType.MouseButton1 then
+        rtdrag = true; rtds = i.Position; rtdp = RTF.Position
+    end
+end)
+RTF.InputChanged:Connect(function(i)
+    if rtdrag and (i.UserInputType == Enum.UserInputType.Touch
+    or i.UserInputType == Enum.UserInputType.MouseButton1) then
+        local d = i.Position - rtds
+        RTF.Position = UDim2.new(rtdp.X.Scale, rtdp.X.Offset + d.X,
+                                 rtdp.Y.Scale, rtdp.Y.Offset + d.Y)
+    end
+end)
+RTF.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch
+    or i.UserInputType == Enum.UserInputType.MouseButton1 then rtdrag = false end
+end)
+
+local RTTB = Instance.new("Frame", RTF)
+RTTB.Size = UDim2.new(1, 0, 0, 36)
+RTTB.BackgroundColor3 = Color3.fromRGB(14, 28, 14)
+RTTB.BorderSizePixel = 0
+Instance.new("UICorner", RTTB).CornerRadius = UDim.new(0, 12)
+
+local RTTL = Instance.new("TextLabel", RTTB)
+RTTL.Size = UDim2.new(1, -44, 1, 0)
+RTTL.Position = UDim2.new(0, 10, 0, 0)
+RTTL.BackgroundTransparency = 1
+RTTL.TextColor3 = Color3.fromRGB(100, 230, 120)
+RTTL.Text = "⚡ Реал-тайм лог"
+RTTL.Font = Enum.Font.GothamBold
+RTTL.TextSize = 13
+RTTL.TextXAlignment = Enum.TextXAlignment.Left
+
+local RTXB = Instance.new("TextButton", RTTB)
+RTXB.Size = UDim2.new(0, 28, 0, 28)
+RTXB.Position = UDim2.new(1, -32, 0, 4)
+RTXB.BackgroundColor3 = Color3.fromRGB(160, 36, 54)
+RTXB.Text = "✕"
+RTXB.TextColor3 = Color3.new(1,1,1)
+RTXB.Font = Enum.Font.GothamBold
+RTXB.TextSize = 12
+Instance.new("UICorner", RTXB).CornerRadius = UDim.new(0, 6)
+RTXB.MouseButton1Up:Connect(function() RTF.Visible = false end)
+
+RTLogBtn.MouseButton1Up:Connect(function() RTF.Visible = not RTF.Visible end)
+
+-- RT кнопки-строка
+local RTBtnRow = Instance.new("Frame", RTF)
+RTBtnRow.Size = UDim2.new(1, -12, 0, 32)
+RTBtnRow.Position = UDim2.new(0, 6, 0, 42)
+RTBtnRow.BackgroundTransparency = 1
+RTBtnRow.BorderSizePixel = 0
+local RTBtnLay = Instance.new("UIListLayout", RTBtnRow)
+RTBtnLay.FillDirection = Enum.FillDirection.Horizontal
+RTBtnLay.SortOrder = Enum.SortOrder.LayoutOrder
+RTBtnLay.Padding = UDim.new(0, 4)
+
+local function makeRT2Btn(parent, text, color, order)
+    local b = Instance.new("TextButton", parent)
+    b.Size = UDim2.new(0.5, -2, 1, 0)
+    b.BackgroundColor3 = color
+    b.Text = text
+    b.TextColor3 = Color3.new(1,1,1)
+    b.Font = Enum.Font.GothamSemibold
+    b.TextSize = 11
+    b.BorderSizePixel = 0
+    b.LayoutOrder = order
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
+end
+
+local RTClrBtn  = makeRT2Btn(RTBtnRow, "🗑 Очистить RT",    Color3.fromRGB(90, 20, 20),  1)
+local RTCopyBtn = makeRT2Btn(RTBtnRow, "📋 Копировать RT",  Color3.fromRGB(36, 90, 60),  2)
+
+RTClrBtn.MouseButton1Up:Connect(function()
+    rtBuf = {}
+    if rtLogText then rtLogText.Text = "(пусто)" end
+end)
+RTCopyBtn.MouseButton1Up:Connect(function()
+    local s = table.concat(rtBuf, "\n")
+    if s == "" then RTCopyBtn.Text = "⚠ Пусто"
+    elseif setclipboard then setclipboard(s); RTCopyBtn.Text = "✓ OK"
+    else RTCopyBtn.Text = "⚠ Нет API" end
+    task.delay(2, function() RTCopyBtn.Text = "📋 Копировать RT" end)
+end)
+
+-- RT scroll
+local RTScr = Instance.new("ScrollingFrame", RTF)
+RTScr.Size = UDim2.new(1, -8, 1, -88)
+RTScr.Position = UDim2.new(0, 4, 0, 82)
+RTScr.BackgroundColor3 = Color3.fromRGB(4, 10, 4)
+RTScr.BorderSizePixel = 0
+RTScr.ScrollBarThickness = 6
+RTScr.ScrollBarImageColor3 = Color3.fromRGB(60, 180, 90)
+RTScr.CanvasSize = UDim2.new(0, 0, 0, 0)
+RTScr.AutomaticCanvasSize = Enum.AutomaticSize.Y
+RTScr.ScrollingDirection = Enum.ScrollingDirection.Y
+RTScr.ElasticBehavior = Enum.ElasticBehavior.Always
+Instance.new("UICorner", RTScr).CornerRadius = UDim.new(0, 8)
+
+local RTPad = Instance.new("UIPadding", RTScr)
+RTPad.PaddingLeft  = UDim.new(0, 6)
+RTPad.PaddingRight = UDim.new(0, 6)
+RTPad.PaddingTop   = UDim.new(0, 6)
+RTPad.PaddingBottom= UDim.new(0, 6)
+
+rtLogText = Instance.new("TextLabel", RTScr)
+rtLogText.Size = UDim2.new(1, 0, 0, 0)
+rtLogText.AutomaticSize = Enum.AutomaticSize.Y
+rtLogText.BackgroundTransparency = 1
+rtLogText.TextColor3 = Color3.fromRGB(100, 240, 130)
+rtLogText.Font = Enum.Font.Code
+rtLogText.TextSize = 10
+rtLogText.TextXAlignment = Enum.TextXAlignment.Left
+rtLogText.TextYAlignment = Enum.TextYAlignment.Top
+rtLogText.TextWrapped = true
+rtLogText.Text = "(реал-тайм не запущен)"
 
 -- ================================================================
 -- HELPERS
@@ -994,3 +1166,242 @@ local function doFullDump()
 end
 
 DumpBtn.MouseButton1Up:Connect(doFullDump)
+
+-- ================================================================
+-- ⚡ РЕАЛ-ТАЙМ ДВИЖОК — секции 21–24
+-- ================================================================
+
+-- Снапшот числовых значений для отслеживания дельты
+local _rtSnapshot = {}
+
+local function rtSnapValue(path, val)
+    local n = tonumber(val)
+    if not n then return end
+    local prev = _rtSnapshot[path]
+    _rtSnapshot[path] = n
+    if prev ~= nil and prev ~= n then
+        local delta = n - prev
+        local sign = delta > 0 and "▲ +" or "▼ "
+        rtLog(string.format("[ИЗМЕНЕНИЕ] %s  %s%s  (было %.4g → стало %.4g)",
+            path, sign, tostring(delta), prev, n))
+    end
+end
+
+-- ── 21. РЕАЛ-ТАЙМ: ВАЛЮТА / СТАТЫ / LEADERSTATS ─────────────────
+local function rt21_Stats()
+    -- leaderstats
+    local ls = LP:FindFirstChild("leaderstats")
+    if ls then
+        for _, v in ipairs(ls:GetDescendants()) do
+            local val = ""
+            pcall(function() val = tostring(v.Value) end)
+            rtSnapValue("leaderstats/" .. v.Name, val)
+        end
+    end
+    -- Все Folder в LP
+    for _, folder in ipairs(LP:GetChildren()) do
+        if folder:IsA("Folder") then
+            for _, v in ipairs(folder:GetDescendants()) do
+                local val = ""
+                pcall(function() val = tostring(v.Value) end)
+                rtSnapValue(folder.Name .. "/" .. v.Name, val)
+            end
+        end
+    end
+    -- Атрибуты игрока
+    local attrs = LP:GetAttributes()
+    for k, v in pairs(attrs) do
+        rtSnapValue("PlayerAttr/" .. k, tostring(v))
+    end
+end
+
+-- ── 22. РЕАЛ-ТАЙМ: REMOTES — перехват входящих событий ───────────
+local _rtHooked = {}
+local function rt22_HookRemotes()
+    for _, obj in ipairs(RS:GetDescendants()) do
+        if obj.ClassName == "RemoteEvent" and not _rtHooked[obj] then
+            _rtHooked[obj] = true
+            pcall(function()
+                obj.OnClientEvent:Connect(function(...)
+                    if not rtActive then return end
+                    local args = {...}
+                    local parts = {}
+                    for i, a in ipairs(args) do
+                        local s = ""
+                        pcall(function()
+                            s = HttpService:JSONEncode(a)
+                        end)
+                        if s == "" then s = tostring(a) end
+                        parts[i] = s
+                    end
+                    rtLog("[RE→Client] " .. obj:GetFullName()
+                        .. "  args: " .. table.concat(parts, ", "):sub(1, 200))
+                end)
+            end)
+        end
+    end
+end
+
+-- ── 23. РЕАЛ-ТАЙМ: ИНВЕНТАРЬ — отслеживание добавления/удаления ──
+local _rtInvSnapshot = {}
+local function rt23_Inventory()
+    -- Собираем текущее состояние дочерних объектов папок инвентаря
+    local invKeywords = {"inventory","items","pets","owned","collection","popit","equip"}
+    local function isInv(name)
+        local lo = name:lower()
+        for _, kw in ipairs(invKeywords) do
+            if lo:find(kw) then return true end
+        end
+        return false
+    end
+
+    local function scanFolder(folder)
+        local set = {}
+        pcall(function()
+            for _, child in ipairs(folder:GetChildren()) do
+                set[child.Name] = child.ClassName
+            end
+        end)
+        return set
+    end
+
+    local sources = {}
+    for _, obj in ipairs(LP:GetChildren()) do
+        if obj:IsA("Folder") and isInv(obj.Name) then
+            table.insert(sources, obj)
+        end
+    end
+    for _, obj in ipairs(RS:GetChildren()) do
+        if obj:IsA("Folder") and isInv(obj.Name) then
+            table.insert(sources, obj)
+        end
+    end
+
+    for _, folder in ipairs(sources) do
+        local path = folder:GetFullName()
+        local current = scanFolder(folder)
+        local prev    = _rtInvSnapshot[path] or {}
+
+        for name, cls in pairs(current) do
+            if not prev[name] then
+                rtLog("[ИНВ +ДОБАВЛЕНО] " .. path .. "/" .. name .. " [" .. cls .. "]")
+            end
+        end
+        for name, cls in pairs(prev) do
+            if not current[name] then
+                rtLog("[ИНВ -УДАЛЕНО]   " .. path .. "/" .. name .. " [" .. cls .. "]")
+            end
+        end
+        _rtInvSnapshot[path] = current
+    end
+end
+
+-- ── 24. РЕАЛ-ТАЙМ: УВЕДОМЛЕНИЯ / GUI ПОПАПЫ ─────────────────────
+-- Следим за появлением новых ScreenGui / Frame / TextLabel в PlayerGui
+local _rtGuiSnapshot = {}
+local function rt24_GuiPopups()
+    local pg = LP:FindFirstChild("PlayerGui")
+    if not pg then return end
+
+    local current = {}
+    for _, gui in ipairs(pg:GetChildren()) do
+        current[gui.Name] = gui.ClassName
+        -- Ищем TextLabel с изменившимся текстом (попапы, уведомления)
+        for _, obj in ipairs(gui:GetDescendants()) do
+            if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+                local txt = ""
+                pcall(function() txt = obj.Text end)
+                if txt ~= "" and txt ~= "..." then
+                    local key = obj:GetFullName()
+                    if _rtGuiSnapshot[key] ~= txt then
+                        if _rtGuiSnapshot[key] ~= nil then
+                            rtLog("[GUI изменение] " .. key
+                                .. "  «" .. tostring(_rtGuiSnapshot[key]):sub(1,80)
+                                .. "» → «" .. txt:sub(1,80) .. "»")
+                        end
+                        _rtGuiSnapshot[key] = txt
+                    end
+                end
+            end
+        end
+    end
+
+    -- Новые ScreenGui (попапы, наградные окна)
+    local prev = _rtGuiSnapshot["__guiNames__"] or {}
+    for name, cls in pairs(current) do
+        if not prev[name] then
+            rtLog("[GUI НОВЫЙ] " .. name .. " [" .. cls .. "]")
+        end
+    end
+    for name in pairs(prev) do
+        if not current[name] then
+            rtLog("[GUI ЗАКРЫТ] " .. name)
+        end
+    end
+    _rtGuiSnapshot["__guiNames__"] = current
+end
+
+-- ── RT главный цикл ───────────────────────────────────────────────
+local RT_INTERVAL = 1.0  -- секунда между тиками
+
+local function startRealtime()
+    if rtActive then return end
+    rtActive = true
+    rtBuf = {}
+    _rtSnapshot = {}
+    _rtInvSnapshot = {}
+    _rtGuiSnapshot = {}
+
+    -- Создаём RT-файл
+    if writefile then
+        pcall(function()
+            if not isfolder(DUMP_DIR) then makefolder(DUMP_DIR) end
+            local ts = os.date and os.date("%Y%m%d_%H%M%S") or tostring(tick()):gsub("%.", "_")
+            rtFile = DUMP_DIR .. "realtime_" .. ts .. ".txt"
+            writefile(rtFile, "=== РЕАЛ-ТАЙМ ДО " .. ts .. " ===\n")
+        end)
+    end
+
+    rtLog("=== Реал-тайм запущен ===")
+    rtLog("  Интервал: " .. RT_INTERVAL .. " сек")
+    rtLog("  Секции: 21(статы) 22(ремоуты) 23(инвентарь) 24(GUI)")
+
+    -- Однократно цепляем хуки RE (секция 22)
+    rt22_HookRemotes()
+
+    rtThread = task.spawn(function()
+        local tick0 = tick()
+        while rtActive do
+            local t = math.floor(tick() - tick0)
+            rtLog("\n── тик " .. t .. "с ──────────────────────────")
+            pcall(rt21_Stats)
+            pcall(rt23_Inventory)
+            pcall(rt24_GuiPopups)
+            -- Перехватываем новые ремоуты если появились
+            pcall(rt22_HookRemotes)
+            task.wait(RT_INTERVAL)
+        end
+        rtLog("\n=== Реал-тайм остановлен ===")
+    end)
+
+    RTBtn.Text = "⚡  Реал-тайм: ВКЛ"
+    RTBtn.BackgroundColor3 = Color3.fromRGB(30, 110, 50)
+    -- Автоматически открыть RT лог
+    RTF.Visible = true
+end
+
+local function stopRealtime()
+    rtActive = false
+    rtThread = nil
+    RTBtn.Text = "⚡  Реал-тайм: ВЫКЛ"
+    RTBtn.BackgroundColor3 = Color3.fromRGB(50, 40, 20)
+end
+
+RTBtn.MouseButton1Up:Connect(function()
+    if rtActive then stopRealtime() else startRealtime() end
+end)
+
+-- Останавливаем RT при выходе из игры
+game:GetService("Players").LocalPlayer.AncestryChanged:Connect(function()
+    stopRealtime()
+end)
