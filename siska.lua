@@ -534,9 +534,16 @@ local function buildGui()
     gui.Parent=lp.PlayerGui
 
     local main = Instance.new("Frame", gui)
-    main.Size=UDim2.new(0,320,0,520); main.Position=UDim2.new(0.5,-160,0.5,-260)
+    local W_FULL, H_FULL = 300, 330      -- размер развёрнутого окна
+    local W_MINI, H_MINI = 150, 40       -- размер свёрнутого
+    local cam = workspace.CurrentCamera
+    if cam then   -- на маленьком экране не вылезаем за края
+        W_FULL = math.min(W_FULL, cam.ViewportSize.X - 20)
+        H_FULL = math.min(H_FULL, cam.ViewportSize.Y - 20)
+    end
+    main.Size=UDim2.new(0,W_FULL,0,H_FULL); main.Position=UDim2.new(0,10,0.5,-H_FULL/2)
     main.BackgroundColor3=C.bg; main.BorderSizePixel=0
-    main.Active=true; main.Draggable=true
+    main.Active=true; main.ClipsDescendants=true
     mkCorner(main,12); mkStroke(main,C.accent,1.5)
 
     -- HEADER
@@ -545,8 +552,8 @@ local function buildGui()
     mkCorner(header,12)
     local htitle=Instance.new("TextLabel",header)
     htitle.Size=UDim2.new(1,-50,1,0); htitle.Position=UDim2.new(0,14,0,0)
-    htitle.BackgroundTransparency=1; htitle.Text="⚡ Z FARM  v7.0  «Ghost»"
-    htitle.TextColor3=Color3.fromRGB(220,235,255); htitle.TextSize=14
+    htitle.BackgroundTransparency=1; htitle.Text="⚡ Z FARM v7"
+    htitle.TextColor3=Color3.fromRGB(220,235,255); htitle.TextSize=13
     htitle.Font=FB; htitle.TextXAlignment=Enum.TextXAlignment.Left
     local minBtn=Instance.new("TextButton",header)
     minBtn.Size=UDim2.new(0,30,0,24); minBtn.Position=UDim2.new(1,-36,0.5,-12)
@@ -564,7 +571,10 @@ local function buildGui()
     local scroll=Instance.new("ScrollingFrame",main)
     scroll.Size=UDim2.new(1,-16,1,-130); scroll.Position=UDim2.new(0,8,0,78)
     scroll.BackgroundTransparency=1; scroll.BorderSizePixel=0
-    scroll.ScrollBarThickness=3; scroll.ScrollBarImageColor3=C.accent
+    scroll.ScrollBarThickness=4; scroll.ScrollBarImageColor3=C.accent
+    scroll.ScrollingEnabled=true; scroll.ScrollingDirection=Enum.ScrollingDirection.Y
+    scroll.ElasticBehavior=Enum.ElasticBehavior.Always
+    scroll.Active=true
     scroll.AutomaticCanvasSize=Enum.AutomaticSize.Y
     scroll.CanvasSize=UDim2.new(0,0,0,0)
     mkList(scroll,Enum.FillDirection.Vertical,4); mkPad(scroll,0,4,0,8)
@@ -828,11 +838,11 @@ local function buildGui()
         local row=Instance.new("Frame",parent)
         row.Size=UDim2.new(1,0,0,36); row.BackgroundColor3=C.panel; row.BorderSizePixel=0; mkCorner(row,7)
         local lbl=Instance.new("TextLabel",row)
-        lbl.Size=UDim2.new(0.4,0,1,0); lbl.Position=UDim2.new(0,10,0,0)
+        lbl.Size=UDim2.new(0.3,0,1,0); lbl.Position=UDim2.new(0,10,0,0)
         lbl.BackgroundTransparency=1; lbl.Text=label; lbl.TextColor3=C.sub
         lbl.TextSize=11; lbl.Font=FR; lbl.TextXAlignment=Enum.TextXAlignment.Left
         local preview=Instance.new("TextLabel",row)
-        preview.Size=UDim2.new(0,80,0,24); preview.Position=UDim2.new(0.42,0,0.5,-12)
+        preview.Size=UDim2.new(0,64,0,24); preview.Position=UDim2.new(0.32,0,0.5,-12)
         preview.BackgroundColor3=C.inputBg; preview.Text=formatMoney(CFG[cfgKey])
         preview.TextColor3=Color3.fromRGB(170,215,255); preview.TextSize=11; preview.Font=FM
         mkCorner(preview,5); mkPad(preview,4,0,0,0)
@@ -946,13 +956,37 @@ local function buildGui()
         "ProximityPrompts","ThrowSequence","TrainingSequence",
     }) do addGuiToggle(guiF,name) end
 
-    -- MINIMIZE
+    -- MINIMIZE (свернуть в маленький прямоугольник / развернуть)
     local minimized=false
+    local function applyMin()
+        tabBar.Visible=not minimized; scroll.Visible=not minimized; sbar.Visible=not minimized
+        main.Size=minimized and UDim2.new(0,W_MINI,0,H_MINI) or UDim2.new(0,W_FULL,0,H_FULL)
+        htitle.Text=minimized and "⚡ Z FARM" or "⚡ Z FARM v7"
+        minBtn.Text=minimized and "▲" or "—"
+    end
     minBtn.MouseButton1Click:Connect(function()
         minimized=not minimized
-        tabBar.Visible=not minimized; scroll.Visible=not minimized; sbar.Visible=not minimized
-        main.Size=minimized and UDim2.new(0,320,0,42) or UDim2.new(0,320,0,520)
-        minBtn.Text=minimized and "▲" or "—"
+        applyMin()
+    end)
+
+    -- DRAG: двигаем окно только за шапку, чтобы не мешать скроллу пальцем
+    local dragging, dragStart, startPos = false, nil, nil
+    header.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1
+        or inp.UserInputType==Enum.UserInputType.Touch then
+            dragging=true; dragStart=inp.Position; startPos=main.Position
+            inp.Changed:Connect(function()
+                if inp.UserInputState==Enum.UserInputState.End then dragging=false end
+            end)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if dragging and (inp.UserInputType==Enum.UserInputType.MouseMovement
+        or inp.UserInputType==Enum.UserInputType.Touch) then
+            local d=inp.Position-dragStart
+            main.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,
+                                    startPos.Y.Scale,startPos.Y.Offset+d.Y)
+        end
     end)
 
     switchTab("Train")
