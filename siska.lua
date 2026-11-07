@@ -272,25 +272,40 @@ local function hookReplicaSet()
     if replicaHooked then return end
     pcall(function()
         local reRE = ReplicatedStorage:FindFirstChild("RemoteEvents")
-        if not reRE then return end
+        if not reRE then log("ReplicaSet: RemoteEvents folder not found"); return end
         local rsRE = reRE:FindFirstChild("ReplicaSet")
-        if not rsRE then return end
+        if not rsRE then log("ReplicaSet: remote not found"); return end
         if not getconnections then return end
+
+        -- БЕЗ hookfunction (он зацикливался: orig после хука указывал на сам хук).
+        -- Вместо этого: отключаем оригинальный обработчик и подключаем свой,
+        -- который патчит значение и вызывает оригинал.
         local conns = getconnections(rsRE.OnClientEvent)
+        local originals = {}
         for _, conn in ipairs(conns) do
-            if conn.Function then
-                local orig = conn.Function
-                hookfunction(orig, (newcclosure or function(f) return f end)(function(repId, path, value, ...)
-                    if CFG.AutoInjectStats and type(path) == "table" then
-                        local f = path[1]
-                        if f == "Money"      then value = CFG.StatMoneyRaw end
-                        if f == "Money/s" or f == "MoneyPerSecond" then value = CFG.StatMPSRaw end
-                        if f == "ThrowPower" or f == "Throw Power" then value = CFG.StatPower end
-                    end
-                    return orig(repId, path, value, ...)
-                end))
+            local fn = conn.Function
+            if type(fn) == "function" then
+                originals[#originals+1] = fn
+                pcall(function() conn:Disable() end)
             end
         end
+        log("ReplicaSet: handlers wrapped = " .. #originals)
+        if #originals == 0 then return end
+
+        local firstFire = true
+        rsRE.OnClientEvent:Connect(function(repId, path, value, ...)
+            if firstFire then firstFire = false; log("ReplicaSet: first event received") end
+            if CFG.AutoInjectStats and type(path) == "table" then
+                local f = path[1]
+                if f == "Money"      then value = CFG.StatMoneyRaw end
+                if f == "Money/s" or f == "MoneyPerSecond" then value = CFG.StatMPSRaw end
+                if f == "ThrowPower" or f == "Throw Power" then value = CFG.StatPower end
+            end
+            for _, fn in ipairs(originals) do
+                local ok, err = pcall(fn, repId, path, value, ...)
+                if not ok then log("ReplicaSet handler error: " .. tostring(err):sub(1, 150)) end
+            end
+        end)
         replicaHooked = true
     end)
 end
