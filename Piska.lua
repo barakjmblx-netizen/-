@@ -16,33 +16,49 @@ local LogText
 local autoSave = true               -- после дампа автоматически создавать .txt
 local UI_MAX_CHARS = 15000          -- лимит текста в TextLabel (Roblox режет длинные строки)
 
--- Папки по очереди: пробуем первую рабочую (Delta Android → workspace executor-а → корень)
+-- Папки по очереди. Delta обычно разрешает писать только внутри своего workspace,
+-- поэтому сначала пробуем относительные пути, абсолютный — последним.
 local DUMP_DIR_CANDIDATES = {
-    "/storage/emulated/0/Delta/Dump/",
-    "Dump/",
+    "PopItDump/",
     "",
+    "/storage/emulated/0/Delta/Dump/",
 }
 local DUMP_DIR = DUMP_DIR_CANDIDATES[1]
 local _dirResolved = false
+local DIR_NOTE = "папка не проверялась"
 
 local function tsNow()
     if os.date then return os.date("%Y%m%d_%H%M%S") end
     return tostring(math.floor(tick()))
 end
 
--- Выбираем папку, в которую реально можно писать
+-- Выбираем папку, в которую файл РЕАЛЬНО записывается (проверяем чтением обратно)
 local function resolveDir()
     if _dirResolved then return DUMP_DIR end
     _dirResolved = true
-    if not writefile then return DUMP_DIR end
-    for _, c in ipairs(DUMP_DIR_CANDIDATES) do
-        local ok = pcall(function()
-            if c ~= "" and isfolder and makefolder and not isfolder(c) then makefolder(c) end
-            writefile(c .. "_test.txt", "ok")
-            if delfile then pcall(delfile, c .. "_test.txt") end
-        end)
-        if ok then DUMP_DIR = c; break end
+    if not writefile then
+        DIR_NOTE = "writefile НЕДОСТУПЕН в этом executor"
+        return DUMP_DIR
     end
+    local errs = {}
+    for _, c in ipairs(DUMP_DIR_CANDIDATES) do
+        local name = c .. "_test.txt"
+        local ok, err = pcall(function()
+            if c ~= "" and isfolder and makefolder and not isfolder(c) then makefolder(c) end
+            writefile(name, "ok")
+            local back = readfile and readfile(name)
+            if readfile and back ~= "ok" then error("файл не читается обратно") end
+            if isfile and not isfile(name) then error("isfile=false после записи") end
+        end)
+        if ok then
+            if delfile then pcall(delfile, name) end
+            DUMP_DIR = c
+            DIR_NOTE = 'пишу в "' .. (c == "" and "(корень workspace)" or c) .. '" — проверено'
+            return DUMP_DIR
+        end
+        errs[#errs + 1] = '"' .. c .. '": ' .. tostring(err)
+    end
+    DIR_NOTE = "ни одна папка не сработала: " .. table.concat(errs, " | ")
     return DUMP_DIR
 end
 
@@ -67,6 +83,7 @@ local function saveFullLog(path)
     return pcall(function()
         resolveDir()
         writefile(path, table.concat(logBuf, "\n"))
+        if isfile and not isfile(path) then error("файл не появился после записи: " .. path) end
     end)
 end
 
@@ -1206,6 +1223,7 @@ local function doFullDump()
         if writefile then
             local path = resolveDir() .. "dump_" .. tsNow() .. ".txt"
             lp("  Файл .txt   : " .. path)
+            lp("  Папка       : " .. DIR_NOTE)
             local ok, err = saveFullLog(path)
             if not ok then lp("  ✗ Ошибка записи txt: " .. tostring(err)) end
         else
@@ -1708,6 +1726,7 @@ local function startRealtime()
 
     rtLog("=== Реал-тайм запущен ===")
     rtLog("  Файл: " .. (rtFile or "НЕТ (writefile недоступен — запись в txt невозможна)"))
+    rtLog("  Папка: " .. DIR_NOTE)
     local on = {}
     for k, v in pairs(RT_CFG) do if v then on[#on + 1] = k end end
     table.sort(on)
